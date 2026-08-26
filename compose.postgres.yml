@@ -1,0 +1,44 @@
+# PostgreSQL topology.
+#
+#   docker compose -f compose.yml -f compose.postgres.yml up -d
+#
+# The FlowCMS image is unchanged — the database is runtime configuration. Garage
+# and Redis are unaffected: storage and cache are independent of the database.
+
+services:
+  app:
+    environment:
+      DATABASE_DIALECT: postgresql
+      DATABASE_URL: postgresql://${POSTGRES_USER:-flowcms}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-flowcms}
+    depends_on:
+      postgres:
+        # The migration runner also retries with backoff, so this is belt and
+        # braces rather than the only defence — but starting after the database
+        # is genuinely accepting connections avoids a first-boot log full of
+        # retries that look like errors.
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-flowcms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-flowcms}
+      # UTF-8 throughout. PostgreSQL compares text case-sensitively by default,
+      # which FlowCMS relies on nowhere: email identity is normalised in the
+      # application so behaviour is identical on every engine.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-flowcms} -d ${POSTGRES_DB:-flowcms}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    # No published port. The application reaches it over the Docker network;
+    # exposing 5432 to the host is a convenience nobody should pay for.
+
+volumes:
+  postgres-data:

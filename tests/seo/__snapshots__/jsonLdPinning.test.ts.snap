@@ -1,0 +1,699 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`archive and index JSON-LD > emits a stable author graph 1`] = `
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@id": "https://example.test/#organization",
+      "@type": "Organization",
+      "name": "FlowCMS Site",
+      "url": "https://example.test/",
+    },
+    {
+      "@id": "https://example.test/blog/author/ada-lovelace#profile",
+      "@type": "ProfilePage",
+      "hasPart": [
+        {
+          "@type": "BlogPosting",
+          "datePublished": "2026-01-15T09:00:00.000Z",
+          "headline": "A Post About Everything",
+          "url": "https://example.test/blog/a-post-about-everything",
+        },
+      ],
+      "mainEntity": {
+        "@id": "https://example.test/blog/author/ada-lovelace#person",
+      },
+      "name": "Ada Lovelace",
+      "url": "https://example.test/blog/author/ada-lovelace",
+    },
+    {
+      "@id": "https://example.test/blog/author/ada-lovelace#person",
+      "@type": "Person",
+      "description": "Writes about computing.",
+      "hasCredential": "MSc",
+      "image": "https://example.test/api/public/images/authors/ada.jpg",
+      "jobTitle": "Staff Writer",
+      "name": "Ada Lovelace",
+      "sameAs": [
+        "https://example.test/profile",
+      ],
+      "url": "https://example.test/blog/author/ada-lovelace",
+      "worksFor": {
+        "@id": "https://example.test/#organization",
+      },
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/",
+          "name": "Home",
+          "position": 1,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog",
+          "name": "Blog",
+          "position": 2,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog/author/ada-lovelace",
+          "name": "Ada Lovelace",
+          "position": 3,
+        },
+      ],
+    },
+  ],
+}
+`;
+
+exports[`archive and index JSON-LD > emits a stable blog index graph 1`] = `
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@id": "https://example.test/#organization",
+      "@type": "Organization",
+      "name": "FlowCMS Site",
+      "url": "https://example.test/",
+    },
+    {
+      "@id": "https://example.test/blog#collection",
+      "@type": "CollectionPage",
+      "breadcrumb": {
+        "@id": "https://example.test/blog#breadcrumb",
+      },
+      "hasPart": [
+        {
+          "@type": "BlogPosting",
+          "datePublished": "2026-01-15T09:00:00.000Z",
+          "headline": "A Post About Everything",
+          "url": "https://example.test/blog/a-post-about-everything",
+        },
+      ],
+      "inLanguage": "en",
+      "isPartOf": {
+        "@id": "https://example.test/#organization",
+      },
+      "name": "FlowCMS Site Blog",
+      "url": "https://example.test/blog",
+    },
+    {
+      "@id": "https://example.test/blog#breadcrumb",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/",
+          "name": "Home",
+          "position": 1,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog",
+          "name": "Blog",
+          "position": 2,
+        },
+      ],
+    },
+  ],
+}
+`;
+
+exports[`archive and index JSON-LD > emits a stable blog index graph for page 2 1`] = `
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@id": "https://example.test/#organization",
+      "@type": "Organization",
+      "name": "FlowCMS Site",
+      "url": "https://example.test/",
+    },
+    {
+      "@id": "https://example.test/blog?page=2#collection",
+      "@type": "CollectionPage",
+      "breadcrumb": {
+        "@id": "https://example.test/blog#breadcrumb",
+      },
+      "hasPart": [
+        {
+          "@type": "BlogPosting",
+          "datePublished": "2026-01-15T09:00:00.000Z",
+          "headline": "A Post About Everything",
+          "url": "https://example.test/blog/a-post-about-everything",
+        },
+      ],
+      "inLanguage": "en",
+      "isPartOf": {
+        "@id": "https://example.test/#organization",
+      },
+      "name": "FlowCMS Site Blog",
+      "url": "https://example.test/blog?page=2",
+    },
+    {
+      "@id": "https://example.test/blog#breadcrumb",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/",
+          "name": "Home",
+          "position": 1,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog",
+          "name": "Blog",
+          "position": 2,
+        },
+      ],
+    },
+  ],
+}
+`;
+
+exports[`archive and index JSON-LD > emits a stable category graph 1`] = `
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@id": "https://example.test/#organization",
+      "@type": "Organization",
+      "name": "FlowCMS Site",
+      "url": "https://example.test/",
+    },
+    {
+      "@id": "https://example.test/blog/category/guides#collection",
+      "@type": "CollectionPage",
+      "breadcrumb": {
+        "@id": "https://example.test/blog/category/guides#breadcrumb",
+      },
+      "description": "Intro copy.",
+      "hasPart": [
+        {
+          "@type": "BlogPosting",
+          "headline": "A Post About Everything",
+          "url": "https://example.test/blog/a-post-about-everything",
+        },
+      ],
+      "inLanguage": "en",
+      "isPartOf": {
+        "@id": "https://example.test/#organization",
+      },
+      "name": "Guides",
+      "url": "https://example.test/blog/category/guides",
+    },
+    {
+      "@id": "https://example.test/blog/category/guides#breadcrumb",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/",
+          "name": "Home",
+          "position": 1,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog",
+          "name": "Blog",
+          "position": 2,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog/category/guides",
+          "name": "Guides",
+          "position": 3,
+        },
+      ],
+    },
+  ],
+}
+`;
+
+exports[`archive and index JSON-LD > emits a stable tag graph 1`] = `
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@id": "https://example.test/#organization",
+      "@type": "Organization",
+      "name": "FlowCMS Site",
+      "url": "https://example.test/",
+    },
+    {
+      "@id": "https://example.test/blog/tag/portable#collection",
+      "@type": "CollectionPage",
+      "breadcrumb": {
+        "@id": "https://example.test/blog/tag/portable#breadcrumb",
+      },
+      "description": "Intro copy.",
+      "hasPart": [
+        {
+          "@type": "BlogPosting",
+          "headline": "A Post About Everything",
+          "url": "https://example.test/blog/a-post-about-everything",
+        },
+      ],
+      "inLanguage": "en",
+      "isPartOf": {
+        "@id": "https://example.test/#organization",
+      },
+      "name": "Portable",
+      "url": "https://example.test/blog/tag/portable",
+    },
+    {
+      "@id": "https://example.test/blog/tag/portable#breadcrumb",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/",
+          "name": "Home",
+          "position": 1,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog",
+          "name": "Blog",
+          "position": 2,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog/tag/portable",
+          "name": "Portable",
+          "position": 3,
+        },
+      ],
+    },
+  ],
+}
+`;
+
+exports[`post JSON-LD > emits a stable graph 1`] = `
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@id": "https://example.test/#organization",
+      "@type": "Organization",
+      "name": "FlowCMS Site",
+      "url": "https://example.test/",
+    },
+    {
+      "@id": "https://example.test/blog/a-post-about-everything#post",
+      "@type": "BlogPosting",
+      "articleSection": "Reference",
+      "author": {
+        "@type": "Person",
+        "description": "Writes about computing.",
+        "image": "https://example.test/api/public/images/authors/ada.jpg",
+        "jobTitle": "Staff Writer",
+        "name": "Ada Lovelace",
+        "sameAs": [
+          "https://example.test/profile",
+        ],
+        "url": "https://example.test/blog/author/ada-lovelace",
+      },
+      "breadcrumb": {
+        "@id": "https://example.test/blog/a-post-about-everything#breadcrumb",
+      },
+      "dateModified": "2026-01-30T08:00:00.000Z",
+      "datePublished": "2026-01-15T09:00:00.000Z",
+      "description": "An excerpt that stands in for the description.",
+      "headline": "A Post About Everything",
+      "image": [
+        "https://example.test/api/public/images/posts/og.jpg",
+      ],
+      "inLanguage": "en",
+      "isAccessibleForFree": true,
+      "keywords": "Portable",
+      "mainEntityOfPage": "https://example.test/blog/a-post-about-everything",
+      "publisher": {
+        "@id": "https://example.test/#organization",
+      },
+      "speakable": {
+        "@type": "SpeakableSpecification",
+        "cssSelector": [
+          "h1",
+          ".summary",
+        ],
+      },
+      "timeRequired": "PT6M",
+      "url": "https://example.test/blog/a-post-about-everything",
+      "wordCount": 1200,
+    },
+    {
+      "@id": "https://example.test/blog/a-post-about-everything#breadcrumb",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/",
+          "name": "Home",
+          "position": 1,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog",
+          "name": "Blog",
+          "position": 2,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog/category/reference",
+          "name": "Reference",
+          "position": 3,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog/a-post-about-everything",
+          "name": "A Post About Everything",
+          "position": 4,
+        },
+      ],
+    },
+    {
+      "@id": "https://example.test/blog/a-post-about-everything#faq",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes.",
+          },
+          "name": "Is it portable?",
+        },
+        {
+          "@type": "Question",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes, and on MariaDB.",
+          },
+          "name": "Does it work on MySQL?",
+        },
+      ],
+      "url": "https://example.test/blog/a-post-about-everything",
+    },
+  ],
+}
+`;
+
+exports[`post JSON-LD > emits a stable graph for a HowTo post 1`] = `
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@id": "https://example.test/#organization",
+      "@type": "Organization",
+      "name": "FlowCMS Site",
+      "url": "https://example.test/",
+    },
+    {
+      "@id": "https://example.test/blog/a-post-about-everything#post",
+      "@type": "HowTo",
+      "author": {
+        "@type": "Person",
+        "description": "Writes about computing.",
+        "image": "https://example.test/api/public/images/authors/ada.jpg",
+        "jobTitle": "Staff Writer",
+        "name": "Ada Lovelace",
+        "sameAs": [
+          "https://example.test/profile",
+        ],
+        "url": "https://example.test/blog/author/ada-lovelace",
+      },
+      "breadcrumb": {
+        "@id": "https://example.test/blog/a-post-about-everything#breadcrumb",
+      },
+      "dateModified": "2026-01-30T08:00:00.000Z",
+      "datePublished": "2026-01-15T09:00:00.000Z",
+      "description": "An excerpt that stands in for the description.",
+      "image": [
+        "https://example.test/api/public/images/posts/og.jpg",
+      ],
+      "inLanguage": "en",
+      "isAccessibleForFree": true,
+      "keywords": "Portable",
+      "mainEntityOfPage": "https://example.test/blog/a-post-about-everything",
+      "name": "A Post About Everything",
+      "publisher": {
+        "@id": "https://example.test/#organization",
+      },
+      "speakable": {
+        "@type": "SpeakableSpecification",
+        "cssSelector": [
+          "h1",
+          ".summary",
+        ],
+      },
+      "step": [
+        {
+          "@type": "HowToStep",
+          "name": "Step one",
+          "position": 1,
+          "text": "Do the first thing.",
+          "url": "https://example.test/blog/a-post-about-everything#howto-step-1",
+        },
+        {
+          "@type": "HowToStep",
+          "name": "Step two",
+          "position": 2,
+          "text": "Do the second thing.",
+          "url": "https://example.test/blog/a-post-about-everything#howto-step-2",
+        },
+      ],
+      "timeRequired": "PT6M",
+      "totalTime": "PT30M",
+      "url": "https://example.test/blog/a-post-about-everything",
+    },
+    {
+      "@id": "https://example.test/blog/a-post-about-everything#breadcrumb",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/",
+          "name": "Home",
+          "position": 1,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog",
+          "name": "Blog",
+          "position": 2,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog/category/reference",
+          "name": "Reference",
+          "position": 3,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog/a-post-about-everything",
+          "name": "A Post About Everything",
+          "position": 4,
+        },
+      ],
+    },
+    {
+      "@id": "https://example.test/blog/a-post-about-everything#faq",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes.",
+          },
+          "name": "Is it portable?",
+        },
+      ],
+      "url": "https://example.test/blog/a-post-about-everything",
+    },
+  ],
+}
+`;
+
+exports[`post JSON-LD > emits a stable graph with no reader questions 1`] = `
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@id": "https://example.test/#organization",
+      "@type": "Organization",
+      "name": "FlowCMS Site",
+      "url": "https://example.test/",
+    },
+    {
+      "@id": "https://example.test/blog/a-post-about-everything#post",
+      "@type": "BlogPosting",
+      "articleSection": "Reference",
+      "author": {
+        "@type": "Person",
+        "description": "Writes about computing.",
+        "image": "https://example.test/api/public/images/authors/ada.jpg",
+        "jobTitle": "Staff Writer",
+        "name": "Ada Lovelace",
+        "sameAs": [
+          "https://example.test/profile",
+        ],
+        "url": "https://example.test/blog/author/ada-lovelace",
+      },
+      "breadcrumb": {
+        "@id": "https://example.test/blog/a-post-about-everything#breadcrumb",
+      },
+      "dateModified": "2026-01-30T08:00:00.000Z",
+      "datePublished": "2026-01-15T09:00:00.000Z",
+      "description": "An excerpt that stands in for the description.",
+      "headline": "A Post About Everything",
+      "image": [
+        "https://example.test/api/public/images/posts/og.jpg",
+      ],
+      "inLanguage": "en",
+      "isAccessibleForFree": true,
+      "keywords": "Portable",
+      "mainEntityOfPage": "https://example.test/blog/a-post-about-everything",
+      "publisher": {
+        "@id": "https://example.test/#organization",
+      },
+      "speakable": {
+        "@type": "SpeakableSpecification",
+        "cssSelector": [
+          "h1",
+          ".summary",
+        ],
+      },
+      "timeRequired": "PT6M",
+      "url": "https://example.test/blog/a-post-about-everything",
+      "wordCount": 1200,
+    },
+    {
+      "@id": "https://example.test/blog/a-post-about-everything#breadcrumb",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/",
+          "name": "Home",
+          "position": 1,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog",
+          "name": "Blog",
+          "position": 2,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog/category/reference",
+          "name": "Reference",
+          "position": 3,
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://example.test/blog/a-post-about-everything",
+          "name": "A Post About Everything",
+          "position": 4,
+        },
+      ],
+    },
+    {
+      "@id": "https://example.test/blog/a-post-about-everything#faq",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes.",
+          },
+          "name": "Is it portable?",
+        },
+      ],
+      "url": "https://example.test/blog/a-post-about-everything",
+    },
+  ],
+}
+`;
+
+exports[`post metadata > emits stable metadata 1`] = `
+{
+  "alternates": {
+    "canonical": "https://example.test/blog/a-post-about-everything",
+  },
+  "description": "An excerpt that stands in for the description.",
+  "openGraph": {
+    "description": "An excerpt that stands in for the description.",
+    "images": [
+      {
+        "alt": "A cover image",
+        "height": 630,
+        "url": "https://example.test/api/public/images/posts/og.jpg",
+        "width": 1200,
+      },
+    ],
+    "modifiedTime": "2026-01-30T08:00:00.000Z",
+    "publishedTime": "2026-01-15T09:00:00.000Z",
+    "siteName": "FlowCMS Site",
+    "title": "A Post About Everything",
+    "type": "article",
+    "url": "https://example.test/blog/a-post-about-everything",
+  },
+  "robots": undefined,
+  "title": "A Post About Everything",
+  "twitter": {
+    "card": "summary_large_image",
+    "description": "An excerpt that stands in for the description.",
+    "images": [
+      "https://example.test/api/public/images/posts/og.jpg",
+    ],
+    "title": "A Post About Everything",
+  },
+}
+`;
+
+exports[`post metadata > emits stable metadata for a non-indexable post 1`] = `
+{
+  "alternates": {
+    "canonical": "https://example.test/blog/a-post-about-everything",
+  },
+  "description": "An excerpt that stands in for the description.",
+  "openGraph": {
+    "description": "An excerpt that stands in for the description.",
+    "images": [
+      {
+        "alt": "A cover image",
+        "height": 630,
+        "url": "https://example.test/api/public/images/posts/og.jpg",
+        "width": 1200,
+      },
+    ],
+    "modifiedTime": "2026-01-30T08:00:00.000Z",
+    "publishedTime": "2026-01-15T09:00:00.000Z",
+    "siteName": "FlowCMS Site",
+    "title": "A Post About Everything",
+    "type": "article",
+    "url": "https://example.test/blog/a-post-about-everything",
+  },
+  "robots": {
+    "follow": true,
+    "index": false,
+  },
+  "title": "A Post About Everything",
+  "twitter": {
+    "card": "summary_large_image",
+    "description": "An excerpt that stands in for the description.",
+    "images": [
+      "https://example.test/api/public/images/posts/og.jpg",
+    ],
+    "title": "A Post About Everything",
+  },
+}
+`;

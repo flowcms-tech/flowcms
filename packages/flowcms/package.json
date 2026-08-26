@@ -1,0 +1,52 @@
+{
+  "name": "flowcms",
+  "version": "0.1.0",
+  "description": "The public FlowCMS theme API. Install this to write a FlowCMS theme package.",
+  "license": "GPL-2.0-or-later",
+  "author": "FlowCMS Tech",
+  "homepage": "https://github.com/flowcms-tech/flowcms",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/flowcms-tech/flowcms.git",
+    "directory": "packages/flowcms"
+  },
+  "bugs": {
+    "url": "https://github.com/flowcms-tech/flowcms/issues"
+  },
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./theme": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.6.0"
+  },
+  "scripts": {
+    "prepublishOnly": "node ./publish-guard.mjs"
+  },
+  "keywords": [
+    "flowcms",
+    "cms",
+    "theme",
+    "theme-api",
+    "react",
+    "nextjs",
+    "self-hosted"
+  ]
+}

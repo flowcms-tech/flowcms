@@ -1,0 +1,218 @@
+# ---------------------------------------------------------------------------
+# CI — the pull-request tier.
+#
+# Everything here runs on every pull request and every push to main, and the
+# whole tier is meant to finish while the author is still looking at the page.
+# It answers four questions, in four jobs that fail for four different reasons:
+#
+#   lockfile   was package-lock.json generated on Linux?
+#   static     does it typecheck and lint?
+#   test       does the suite pass?
+#   artifacts  would `npm publish` leak anything?
+#
+# What is deliberately NOT here: the database matrix, the Docker image, the
+# clean-consumer proofs and the generated-application proof. Each of those costs
+# minutes and needs services or a container build. They live in the main tier
+# (database-matrix.yml, docker.yml, consumer-proofs.yml) and every one of them
+# is in the release tier. See docs/ci.md for the reasoning behind each.
+#
+# NO SECRET IS REQUIRED TO RUN THIS FILE, AND NONE IS GENERATED FOR IT EITHER.
+# Nothing in this tier runs the application: it typechecks, lints, runs vitest
+# and inspects packed file lists. Every suite that needs a secret sets it
+# itself. Setting AUTH_SECRET here actively breaks a suite — see the note above
+# the `Vitest` step before adding a generation step back.
+# ---------------------------------------------------------------------------
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Callable from release.yml so the release tier runs this exact file rather
+  # than a second copy of it that drifts.
+  workflow_call:
+  workflow_dispatch:
+
+# Least privilege, at the top, for every job in the file. No job here writes
+# anything: not a comment, not a tag, not a package. Only the (blocked) publish
+# job in release.yml asks for more.
+permissions:
+  contents: read
+
+# A distinct literal prefix per workflow file. Without it, a release run that
+# calls several reusable workflows would compute the same group for all of them
+# — `github.workflow` is the CALLER's name inside a called workflow — and they
+# would cancel each other.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Node 22 and only Node 22. `engines.node` says >=22, the Docker image is
+  # node:22-bookworm-slim, and the generated projects require the same. A
+  # version matrix here would test combinations nothing ships on.
+  NODE_VERSION: "22"
+  NEXT_TELEMETRY_DISABLED: "1"
+  # Ordinary CI output, not a debugging session. Raise it in a re-run when a
+  # native module fails to install and the reason is not in the summary.
+  npm_config_loglevel: warn
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Eight seconds, no install, and it stops the failure that otherwise appears
+  # four minutes into a Docker build as a Tailwind error.
+  # -------------------------------------------------------------------------
+  lockfile:
+    name: Lockfile platform
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Lockfile was generated on Linux
+        run: node scripts/ci/assert-linux-lockfile.mjs
+
+  # -------------------------------------------------------------------------
+  static:
+    name: Typecheck and lint
+    runs-on: ubuntu-24.04
+    needs: [lockfile]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          # Caches ~/.npm — the download cache, NOT node_modules. `npm ci` still
+          # deletes and rebuilds node_modules from the lockfile every run, so a
+          # dependency missing from the lockfile still fails here. A cache that
+          # can hide a missing dependency is worse than no cache.
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # `npm ci`, never `npm install`: it installs exactly what the lockfile
+      # pins and exits non-zero when package.json and the lockfile disagree.
+      # `npm install` would quietly rewrite the lockfile and pass.
+      - run: npm ci --no-audit --no-fund
+
+      # `flowcms/theme` is a real package subpath resolved through node_modules,
+      # not a tsconfig alias — so its declarations do not exist until the
+      # package is built, and `tsc --noEmit` cannot resolve a single theme
+      # import without this. It is a build step, not a packaging step.
+      - name: Build the flowcms package and the example theme
+        run: npm run build:packages
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # `next lint` is removed in Next 16 and `next build` no longer lints, so
+      # eslint runs directly against the flat config.
+      - name: Lint
+        run: npm run lint
+
+  # -------------------------------------------------------------------------
+  test:
+    name: Test suite
+    runs-on: ubuntu-24.04
+    needs: [lockfile]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --no-audit --no-fund
+
+      # NO SECRETS ARE GENERATED FOR THIS JOB, AND ADDING THEM BREAKS IT.
+      #
+      # This step used to run scripts/ci/generate-test-secrets.mjs. It was
+      # removed, and the reason is not "the suite happens not to need them" —
+      # it is that AUTH_SECRET being SET makes a suite fail.
+      #
+      # `resolveAuthSecret()` is a frozen module-load snapshot
+      # (CONFIGURED_AT_LOAD / VERDICT_AT_LOAD in
+      # src/Framework/Auth/authSecretConfig.ts), so it reports the environment
+      # the worker STARTED with and no afterEach can influence it. The last
+      # test in tests/auth/authSecretLeakage.test.ts asserts, unconditionally,
+      # that it returns undefined — its comment says "this suite's process has
+      # no usable AUTH_SECRET". A generated AUTH_SECRET is a valid 44-character
+      # random base64 string, which classifies as `usable`, so that assertion
+      # fails.
+      #
+      # Nothing here wants the values anyway: every suite that needs one sets it
+      # itself and restores it (captcha*.test.ts, setupRoute.test.ts,
+      # authSecret*.test.ts), the remaining references are text assertions over
+      # .env.example and rendered templates, and none of the three build scripts
+      # `npm test` runs reads process.env at all.
+      #
+      # The jobs that DO generate secrets are the ones that run the application:
+      # consumer-proofs.yml's `integration-build` (a real `next build`) and
+      # docker.yml's `image` (a running container). Not this one.
+
+      # `npm test` runs three builders directly — `node scripts/build-package.mjs`,
+      # `node scripts/build-example-theme.mjs`, `node scripts/build-create-flowcms.mjs`
+      # — and then `vitest run`. It calls `node` rather than `npm run` so the
+      # command means the same thing under pnpm, yarn and bun. The builds are not
+      # incidental: tests/packaging reads packages/flowcms/dist and
+      # tests/scaffolder reads the generated template, and both refuse to skip
+      # when the artifact is missing.
+      #
+      # No database service. The contract suite runs SQLite in a temp file
+      # unconditionally and adds an engine only when its TEST_*_URL is set —
+      # which is what database-matrix.yml supplies in the main tier.
+      - name: Vitest
+        run: npm test
+
+  # -------------------------------------------------------------------------
+  # Cheap enough for every pull request, which is the entire argument for it
+  # existing separately from the clean-consumer proof in consumer-proofs.yml.
+  # That proof audits tarballs too, and takes minutes; a hygiene rule that only
+  # runs before a release finds its first violation at the worst moment.
+  # -------------------------------------------------------------------------
+  artifacts:
+    name: Artifact hygiene
+    runs-on: ubuntu-24.04
+    needs: [lockfile]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --no-audit --no-fund
+
+      # Both builds, because the gate refuses to run against an unbuilt package
+      # rather than reporting a clean bill of health for an artifact that does
+      # not exist.
+      - name: Build every publishable artifact
+        run: |
+          npm run build:packages
+          npm run build:template
+
+      - name: Artifact hygiene (packed file names only, never contents)
+        run: node scripts/verify-artifact-hygiene.mjs
+
+  # -------------------------------------------------------------------------
+  # One check to require in branch protection. Without it, protecting the four
+  # jobs by name means editing the branch rule every time a job is added or
+  # renamed, and a job that silently disappears stops being required.
+  # -------------------------------------------------------------------------
+  gate:
+    name: CI gate
+    runs-on: ubuntu-24.04
+    needs: [lockfile, static, test, artifacts]
+    if: always()
+    steps:
+      - name: Fail if any required job did not succeed
+        run: |
+          results='${{ join(needs.*.result, ',') }}'
+          echo "job results: $results"
+          case "$results" in
+            *failure*|*cancelled*|*skipped*)
+              echo "::error::a required CI job did not succeed"
+              exit 1
+              ;;
+          esac
+          echo "all required CI jobs succeeded"

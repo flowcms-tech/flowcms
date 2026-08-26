@@ -1,0 +1,44 @@
+{
+  "name": "create-flowcms",
+  "version": "0.1.0",
+  "description": "Create a new FlowCMS site. Scaffolds the application, its deployment configuration and its .env, then installs dependencies.",
+  "license": "GPL-2.0-or-later",
+  "author": "FlowCMS Tech",
+  "homepage": "https://github.com/flowcms-tech/flowcms",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/flowcms-tech/flowcms.git",
+    "directory": "packages/create-flowcms"
+  },
+  "bugs": {
+    "url": "https://github.com/flowcms-tech/flowcms/issues"
+  },
+  "private": true,
+  "type": "module",
+  "bin": {
+    "create-flowcms": "./bin/create-flowcms.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "template",
+    "template.json",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "prepublishOnly": "node ./publish-guard.mjs"
+  },
+  "keywords": [
+    "flowcms",
+    "cms",
+    "create",
+    "create-flowcms",
+    "scaffold",
+    "generator",
+    "nextjs",
+    "self-hosted"
+  ]
+}

@@ -1,0 +1,23 @@
+# TODO (before making the repository public): replace OWNER/REPO in the URLs
+# below with this repository's real path. GitHub requires absolute URLs in
+# `contact_links` — a relative path is silently dropped — so these are written
+# as an obvious placeholder rather than a plausible-looking guess.
+#
+# Also enable private vulnerability reporting under
+# Settings → Code security → Private vulnerability reporting, or the security
+# link below leads to a policy nobody can act on.
+
+blank_issues_enabled: false
+
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/OWNER/REPO/security/policy
+    about: >-
+      Never open a public issue for a security problem. Report it privately;
+      SECURITY.md explains how, and what is in and out of scope.
+
+  - name: Question, deployment help, or an idea
+    url: https://github.com/OWNER/REPO/discussions
+    about: >-
+      Usage questions, deployment help and half-formed ideas belong in
+      Discussions. Issues are for reproducible defects and concrete proposals.

@@ -1,0 +1,268 @@
+# ---------------------------------------------------------------------------
+# Database matrix — the main tier.
+#
+# FlowCMS supports four engines: SQLite, PostgreSQL 17, MySQL 8.4 and
+# MariaDB 11.4. Two levels of evidence, and they are not interchangeable:
+#
+#   contract-*   the parameterised suite in tests/db, run against a REAL server
+#                for one engine each. Minutes, no image build. Answers: does the
+#                application's data layer behave identically on this engine?
+#
+#   topology     scripts/db-matrix.sh against the actual compose overlay —
+#                cold start from empty volumes, migrations at container start,
+#                first-owner bootstrap, duplicate bootstrap refused, a marker
+#                row written through the application's own database layer and
+#                still there after a container restart and a down/up. Tens of
+#                minutes and four image builds. Answers: does a real deployment
+#                of this topology survive being operated?
+#
+# MARIADB IS ITS OWN JOB, WITH ITS OWN IMAGE, ITS OWN CREDENTIALS AND ITS OWN
+# TEST_* VARIABLE, in both levels. It shares a driver and a URL scheme with
+# MySQL and it is a different product; Phase 5 found a real bug that presented
+# as "MySQL passes, MariaDB fails". Running MySQL twice and labelling one of
+# them MariaDB would have hidden exactly that. Never collapse these two jobs
+# into a matrix over an image tag.
+#
+# SQLite is not repeated at the contract level: tests/db/contract.test.ts runs
+# it unconditionally against a temp file in every `npm test`, so ci.yml already
+# covers it on every pull request. It IS in the topology matrix, because the
+# question there is about volumes and container restarts, not about SQL.
+# ---------------------------------------------------------------------------
+name: Database matrix
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "40 3 * * *"
+  workflow_dispatch:
+    inputs:
+      topology:
+        description: "Also run the compose topology matrix (slow — four image builds)"
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      topology:
+        description: "Also run the compose topology matrix"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dbmatrix-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+  NEXT_TELEMETRY_DISABLED: "1"
+  # A throwaway password for a database that exists on one ephemeral runner,
+  # is reachable only on that runner's loopback interface, and is destroyed
+  # with it. It is written here rather than generated because GitHub evaluates
+  # `services:` before any step of the job runs — there is no step in which a
+  # generated value could reach it.
+  #
+  # This is NOT an exception to "no secret in workflow YAML". It is not a
+  # secret: it grants access to nothing, protects nothing, and is not reused.
+  # Where generation IS possible — the compose topology jobs, which read a
+  # `.env` file — every credential is random and per-run. See
+  # scripts/ci/write-ci-env.mjs.
+  CI_DB_PASSWORD: ci_local_only_not_a_secret
+
+jobs:
+  # -------------------------------------------------------------------------
+  contract-postgresql:
+    name: Contract — PostgreSQL 17
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_USER: flowcms
+          POSTGRES_PASSWORD: ci_local_only_not_a_secret
+          POSTGRES_DB: flowcms_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flowcms -d flowcms_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+          --health-start-period 10s
+    env:
+      DATABASE_DIALECT: postgresql
+      DATABASE_URL: postgresql://flowcms:ci_local_only_not_a_secret@127.0.0.1:5432/flowcms_ci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --no-audit --no-fund
+
+      # The suite's own comment says it plainly: "Remote engines are migrated by
+      # the harness that starts them." This job is that harness.
+      - name: Migrate
+        run: node scripts/migrate.mjs
+
+      - name: Contract and application-binding suites
+        env:
+          TEST_POSTGRES_URL: ${{ env.DATABASE_URL }}
+          TEST_BINDING_DIALECT: postgresql
+          TEST_BINDING_URL: ${{ env.DATABASE_URL }}
+        run: npx vitest run tests/db
+
+  # -------------------------------------------------------------------------
+  contract-mysql:
+    name: Contract — MySQL 8.4
+    runs-on: ubuntu-24.04
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci_local_only_not_a_secret
+          MYSQL_DATABASE: flowcms_ci
+          MYSQL_USER: flowcms
+          MYSQL_PASSWORD: ci_local_only_not_a_secret
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+          --health-start-period 30s
+    env:
+      DATABASE_DIALECT: mysql
+      DATABASE_URL: mysql://flowcms:ci_local_only_not_a_secret@127.0.0.1:3306/flowcms_ci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Migrate
+        run: node scripts/migrate.mjs
+      - name: Contract and application-binding suites
+        env:
+          TEST_MYSQL_URL: ${{ env.DATABASE_URL }}
+          TEST_BINDING_DIALECT: mysql
+          TEST_BINDING_URL: ${{ env.DATABASE_URL }}
+        run: npx vitest run tests/db
+
+  # -------------------------------------------------------------------------
+  # A SEPARATE JOB. Read the header before merging this with the one above.
+  # -------------------------------------------------------------------------
+  contract-mariadb:
+    name: Contract — MariaDB 11.4
+    runs-on: ubuntu-24.04
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: ci_local_only_not_a_secret
+          MARIADB_DATABASE: flowcms_ci
+          MARIADB_USER: flowcms
+          MARIADB_PASSWORD: ci_local_only_not_a_secret
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mariadb-admin ping -h 127.0.0.1 --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+          --health-start-period 30s
+    env:
+      # MariaDB speaks the MySQL wire protocol, so the URL scheme is mysql://
+      # while the dialect is explicitly mariadb. That distinction is the whole
+      # reason DATABASE_DIALECT is configured rather than inferred.
+      DATABASE_DIALECT: mariadb
+      DATABASE_URL: mysql://flowcms:ci_local_only_not_a_secret@127.0.0.1:3306/flowcms_ci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Migrate
+        run: node scripts/migrate.mjs
+      - name: Contract and application-binding suites
+        env:
+          TEST_MARIADB_URL: ${{ env.DATABASE_URL }}
+          TEST_BINDING_DIALECT: mariadb
+          TEST_BINDING_URL: ${{ env.DATABASE_URL }}
+        run: npx vitest run tests/db
+
+  # -------------------------------------------------------------------------
+  # THE TOPOLOGY MATRIX.
+  #
+  # Compose overlays here, GitHub `services:` above — on purpose, and the two
+  # answer different questions. `services:` gives a bare server on loopback,
+  # which is all the contract suite needs and is much cheaper. The overlays are
+  # the artefact an operator actually runs: they carry the healthchecks, the
+  # named volumes, the `depends_on: service_healthy` ordering, the charset flags
+  # and the `:?` guards that refuse to start without a credential. None of that
+  # can be reproduced by a `services:` block, and all of it is what breaks.
+  #
+  # Off by default because each leg builds the image. Scheduled nightly, and
+  # required by the release tier.
+  # -------------------------------------------------------------------------
+  topology:
+    name: Topology — ${{ matrix.engine }}
+    runs-on: ubuntu-24.04
+    if: ${{ inputs.topology || github.event_name == 'schedule' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [sqlite, postgres, mysql, mariadb]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Lockfile was generated on Linux
+        run: node scripts/ci/assert-linux-lockfile.mjs
+
+      # Compose reads a `.env` FILE before any step's environment exists, so
+      # $GITHUB_ENV cannot configure it. Every value written here is random and
+      # lives for this job only; nothing is printed.
+      - name: Write an ephemeral compose environment
+        run: node scripts/ci/write-ci-env.mjs
+
+      - name: Cold start, bootstrap and persistence
+        run: bash scripts/db-matrix.sh ${{ matrix.engine }}
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose -f compose.yml down -v >/dev/null 2>&1 || true
+          rm -f .env
+
+  # -------------------------------------------------------------------------
+  gate:
+    name: Database gate
+    runs-on: ubuntu-24.04
+    needs: [contract-postgresql, contract-mysql, contract-mariadb, topology]
+    if: always()
+    steps:
+      - name: Fail if a database job failed
+        run: |
+          results='${{ join(needs.*.result, ',') }}'
+          echo "job results: $results"
+          # `skipped` is legitimate here and only here: the topology matrix is
+          # deliberately off outside the nightly and release tiers.
+          case "$results" in
+            *failure*|*cancelled*)
+              echo "::error::a database job did not succeed"
+              exit 1
+              ;;
+          esac
+          echo "no database job failed"

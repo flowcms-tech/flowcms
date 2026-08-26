@@ -1,0 +1,224 @@
+# ---------------------------------------------------------------------------
+# Docker gates.
+#
+# NOTHING IN THIS FILE PUSHES AN IMAGE. There is no registry login, no
+# credential, and no `docker push` — the images are built, exercised and thrown
+# away with the runner. Publishing an image is a release decision and it is not
+# made here.
+#
+# Two jobs, at two costs:
+#
+#   image            builds the repository's own Dockerfile and then RUNS it —
+#                    a build that succeeds and a container that serves 500s are
+#                    not the same result, which is the whole reason /api/ready
+#                    exists and the whole reason the healthcheck is an HTTP
+#                    probe rather than a port check.
+#
+#   generated-image  the full clean-application proof, which ends in a
+#                    `docker build` whose context is a project generated OUTSIDE
+#                    this repository by the packed create-flowcms.
+#
+# On a pull request only `image` runs, and only when a Docker-relevant file
+# changed — the `paths:` filter below. A container build is minutes; paying it
+# on a blog-post typo is how a pipeline becomes something people route around.
+# ---------------------------------------------------------------------------
+name: Docker
+
+on:
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker/**"
+      - "compose*.yml"
+      - "next.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/collect-db-drivers.mjs"
+      - "scripts/migrate.mjs"
+      - "scripts/bootstrap-owner.mjs"
+      - ".github/workflows/docker.yml"
+  push:
+    branches: [main]
+  schedule:
+    # 03:20 UTC daily. Off-peak, and far enough from the top of the hour to miss
+    # the scheduling stampede GitHub warns about.
+    - cron: "20 3 * * *"
+  # `full` is an INPUT rather than a check on `github.event_name`, and that is
+  # not a style preference. Inside a called workflow the event context is the
+  # CALLER's: a release triggered by a `v*` tag reports `github.event_name ==
+  # 'push'`, so an `if:` written against the event would skip the generated
+  # image build during a release — the one run where it is least optional.
+  workflow_call:
+    inputs:
+      full:
+        description: "Also run the generated-project image build (slow)"
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Also run the generated-project image build (slow)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: "22"
+  IMAGE: flowcms:ci
+  CONTAINER: flowcms-smoke
+
+jobs:
+  # -------------------------------------------------------------------------
+  image:
+    name: Source image build and runtime smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Before spending minutes in the builder. The image build installs from
+      # the lockfile and dies inside Tailwind when the Linux binaries were
+      # pruned out of it; this says so in seconds instead.
+      - name: Lockfile was generated on Linux
+        run: node scripts/ci/assert-linux-lockfile.mjs
+
+      # Plain `docker build`, not a third-party build action. No registry
+      # cache and no extra action in the supply chain — a deliberate v0.1
+      # trade, recorded in docs/ci.md.
+      - name: Build the image
+        run: docker build --tag "$IMAGE" .
+
+      - name: Generate ephemeral runtime secrets
+        run: node scripts/ci/generate-test-secrets.mjs >> "$GITHUB_ENV"
+
+      # SQLite on an anonymous volume — the default topology, no extra service.
+      # Storage is deliberately left unconfigured: readiness REPORTS storage and
+      # never gates on it, because a fresh install has no bucket yet, and this
+      # run is the cheapest place to keep that promise honest.
+      - name: Run the container
+        run: |
+          docker run --detach \
+            --name "$CONTAINER" \
+            --publish 3000:3000 \
+            --env AUTH_SECRET="$AUTH_SECRET" \
+            --env CAPTCHA_SECRET="$CAPTCHA_SECRET" \
+            --env PREVIEW_SECRET="$PREVIEW_SECRET" \
+            --env FLOWCMS_SETUP_TOKEN="$FLOWCMS_SETUP_TOKEN" \
+            "$IMAGE"
+
+      - name: Wait for readiness
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS --max-time 3 http://localhost:3000/api/ready >/dev/null 2>&1; then
+              echo "ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::the container never became ready"
+          docker logs "$CONTAINER" | tail -50
+          exit 1
+
+      - name: Liveness and readiness answer correctly
+        run: |
+          set -e
+          health="$(curl -fsS --max-time 5 http://localhost:3000/api/health)"
+          ready="$(curl -fsS --max-time 5 http://localhost:3000/api/ready)"
+          echo "health: $health"
+          echo "ready:  $ready"
+
+          case "$ready" in
+            *'"status":"ready"'*) echo "ok    readiness reports ready" ;;
+            *) echo "::error::readiness did not report ready"; exit 1 ;;
+          esac
+
+          # Readiness is a public endpoint. It must never describe how to reach
+          # the database.
+          case "$ready" in
+            *password*|*@*) echo "::error::readiness leaked connection detail"; exit 1 ;;
+            *) echo "ok    readiness leaked no connection detail" ;;
+          esac
+
+      - name: Migrations ran at container start
+        run: |
+          if docker logs "$CONTAINER" 2>&1 | grep -q "Migrations applied"; then
+            echo "ok    migrations ran from the entrypoint"
+          else
+            echo "::error::no migration line in the container log"
+            docker logs "$CONTAINER" | tail -50
+            exit 1
+          fi
+
+      # The generated values are masked, so GitHub would redact them from the
+      # log — but "the log viewer hides it" is not the same as "the application
+      # never printed it", and only the second one is a property worth having.
+      - name: No secret reached the container log
+        run: |
+          log="$(docker logs "$CONTAINER" 2>&1)"
+          for value in "$AUTH_SECRET" "$CAPTCHA_SECRET" "$PREVIEW_SECRET" "$FLOWCMS_SETUP_TOKEN"; do
+            if printf '%s' "$log" | grep -Fq "$value"; then
+              echo "::error::a secret was written to the container log"
+              exit 1
+            fi
+          done
+          echo "ok    no configured secret appears in the container log"
+
+      - name: Container logs (on failure)
+        if: failure()
+        run: docker logs "$CONTAINER" || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm --force --volumes "$CONTAINER" >/dev/null 2>&1 || true
+          docker rmi --force "$IMAGE" >/dev/null 2>&1 || true
+
+  # -------------------------------------------------------------------------
+  # THE GENERATED-APPLICATION DOCKER PROOF.
+  #
+  # `scripts/verify-create-flowcms.mjs` packs create-flowcms, copies the tarball
+  # somewhere unrelated to this repository, installs it, runs the installed bin,
+  # generates a project outside the repository, and then installs, builds,
+  # typechecks, lints and `docker build`s that project. Running the CLI from the
+  # repository would prove only that it works where every file it could want is
+  # already on disk.
+  #
+  # Not on pull requests and not on a merge: it is the most expensive single
+  # gate in the pipeline. consumer-proofs.yml runs the SAME script with
+  # `--no-docker` on a push to main, so a merge still gets the
+  # install/build/typecheck/lint half of it — the two jobs are one script at two
+  # depths, not two overlapping proofs.
+  #
+  # Nightly, or whenever a caller asks for the full depth. See the note on
+  # `full` at the top of this file before changing this condition back into an
+  # event check.
+  # -------------------------------------------------------------------------
+  generated-image:
+    name: Generated project builds an image
+    runs-on: ubuntu-24.04
+    if: ${{ inputs.full || github.event_name == 'schedule' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --no-audit --no-fund
+
+      - name: Clean application proof, including the image build
+        run: node scripts/verify-create-flowcms.mjs
+
+      - name: Remove the probe image
+        if: always()
+        run: docker rmi --force flowcms-generated:probe >/dev/null 2>&1 || true

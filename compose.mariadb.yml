@@ -1,0 +1,49 @@
+# MariaDB topology.
+#
+#   docker compose -f compose.yml -f compose.mariadb.yml up -d
+#
+# A separate service and a separate volume, NOT an alias of the MySQL topology
+# pointed at a different image. MariaDB is an independently supported engine:
+# its migrations, bootstrap, contract suite and persistence are all verified
+# against a real MariaDB server. Phase 5 found a genuine bug that presented as
+# "MySQL passes, MariaDB fails", which is precisely the class of thing an alias
+# would have hidden.
+
+services:
+  app:
+    environment:
+      DATABASE_DIALECT: mariadb
+      # MariaDB speaks the MySQL wire protocol, so the URL scheme is mysql://
+      # while the dialect is explicitly mariadb. That distinction is the whole
+      # reason the dialect is configured rather than inferred.
+      DATABASE_URL: mysql://${MARIADB_USER:-flowcms}:${MARIADB_PASSWORD:?set MARIADB_PASSWORD in .env}@mariadb:3306/${MARIADB_DATABASE:-flowcms}
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+  mariadb:
+    image: mariadb:11.4
+    restart: unless-stopped
+    # utf8mb4 with MariaDB's uca1400 collation family. Same reasoning as MySQL:
+    # deliberate charset, and application-level identity normalisation rather
+    # than reliance on server collation.
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_uca1400_ai_ci
+    environment:
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-flowcms}
+      MARIADB_USER: ${MARIADB_USER:-flowcms}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?set MARIADB_PASSWORD in .env}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?set MARIADB_ROOT_PASSWORD in .env}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    # No published port.
+
+volumes:
+  mariadb-data:

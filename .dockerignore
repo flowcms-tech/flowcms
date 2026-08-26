@@ -1,0 +1,97 @@
+# Written before the Dockerfile, deliberately: the build context is uploaded to
+# the daemon before any instruction runs, so an unignored data/app.db or
+# .env.local is already off the machine whether or not a COPY references it.
+
+# Version control and editor/tooling state
+.git
+.gitignore
+.github
+.idea
+.vscode
+.claude
+.codex
+.cursor
+.impeccable
+.superpowers
+
+# Reinstalled and rebuilt inside the image
+node_modules
+.next
+out
+build
+
+# Runtime state. A developer's database must never enter a build context.
+data
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# Secrets. .env.example is documentation and is deliberately NOT excluded —
+# the negation must follow the wildcard to survive it.
+.env
+.env.*
+!.env.example
+data-info.txt
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+credentials.json
+client_secret*.json
+service-account*.json
+
+# Regenerated in the image by scripts/copy-tinymce.mjs. Copying the developer's
+# build would ship whatever version happened to be on their machine.
+public/assets/tinymce
+
+# Logs and caches
+*.log
+logs
+coverage
+.cache
+*.tsbuildinfo
+
+# Not needed to build or run the application
+docs
+tests
+vitest.config.ts
+README.md
+
+# Private developer documentation and the agent-facing root documents. These
+# live in dev-docs/ (Phase 9.10E); the three filenames below are kept as a
+# defensive rule so a tool that recreates one at the root cannot put it into a
+# build context.
+dev-docs
+CLAUDE.md
+AGENTS.md
+PROJECT_DOCUMENTATION.md
+
+# Repository governance and GitHub configuration. These describe contributing
+# to FlowCMS, not running it, and changing one should not invalidate a layer.
+CONTRIBUTING.md
+SECURITY.md
+CODE_OF_CONDUCT.md
+CHANGELOG.md
+
+# The scaffolder and the template it carries. `packages/flowcms` IS needed —
+# the application imports the built theme contract from it — but create-flowcms
+# only generates other projects, and its `template/` directory is a second full
+# copy of this repository. Copying it would roughly double the build context.
+packages/create-flowcms
+
+# Local pack artifacts
+*.tgz
+
+# Docker's own files — changing compose.yml should not bust the build cache
+Dockerfile
+.dockerignore
+compose.yml
+compose.*.yml
+
+# Package build output: regenerated inside the image by scripts/build-package.mjs
+# and scripts/build-example-theme.mjs. Copying a developer's would ship whatever
+# was on their machine and bust the layer cache on every local rebuild.
+packages/*/dist

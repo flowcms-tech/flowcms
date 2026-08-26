@@ -1,0 +1,21 @@
+# External S3 mode — disables the bundled Garage service.
+#
+#   docker compose -f compose.yml -f compose.external-s3.yml up -d
+#
+# For installs using a hosted S3-compatible provider: AWS S3, Cloudflare R2,
+# Wasabi, Backblaze B2, DigitalOcean Spaces, or any other S3 API.
+#
+# Assigning an unused profile is how Compose excludes a service from the default
+# set. The app's `depends_on` for garage is `required: false`, so it starts
+# normally with the service absent — there is no architectural dependency on
+# Garage, only a default.
+#
+# Set these in .env to point at the provider:
+#   S3_ENDPOINT, S3_REGION, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
+#
+# They can equally be left unset and configured later in Admin > Settings —
+# storage is not required for the application to start or be ready.
+
+services:
+  garage:
+    profiles: ["disabled"]

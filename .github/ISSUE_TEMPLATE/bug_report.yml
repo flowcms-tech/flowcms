@@ -1,0 +1,62 @@
+name: Bug report
+description: Something in FlowCMS behaves differently from how it is documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **Not for security problems.** If the bug lets someone read, change or
+        reach something they should not, stop here and follow `SECURITY.md` in
+        the repository root instead — a public issue is a disclosure.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: >-
+        The shortest path from a working install to the wrong behaviour. If it
+        only reproduces with particular content or settings, say which.
+      placeholder: |
+        1. Sign in as a contributor
+        2. Open …
+        3. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: >-
+        Fill in what applies. Most FlowCMS bugs turn out to depend on one of
+        these, and guessing wastes a round trip.
+      value: |
+        - FlowCMS version or commit:
+        - How it runs (Docker Compose / `next start` / dev server):
+        - Database (SQLite / PostgreSQL / MySQL / MariaDB):
+        - Storage (bundled Garage / external S3 provider / not configured):
+        - Redis configured (yes / no):
+        - Admin path (default `/admin` or a `FLOWCMS_ADMIN_PATH` override):
+        - Node version:
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or errors
+      description: >-
+        Server output, browser console, or the response body. Redact secrets —
+        `AUTH_SECRET`, S3 keys, session cookies and integration tokens are not
+        useful to us and are dangerous in a public issue.
+      render: text
+    validations:
+      required: false

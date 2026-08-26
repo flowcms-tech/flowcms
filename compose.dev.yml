@@ -1,0 +1,25 @@
+# Development overlay — bind-mounts the source and runs the dev server.
+#
+#   docker compose -f compose.yml -f compose.dev.yml up
+#
+# Builds the `builder` stage rather than `runner`, because the dev server needs
+# devDependencies and the full source tree, neither of which the runtime image
+# carries.
+
+services:
+  app:
+    build:
+      context: .
+      target: builder
+    command: ["npm", "run", "dev"]
+    environment:
+      NODE_ENV: development
+    volumes:
+      - .:/app
+      # Anonymous volumes masking the bind mount. Without these, the host's
+      # node_modules and .next shadow the container's — and the host's native
+      # modules (libsql, @napi-rs/canvas) are built for the host OS and
+      # architecture, so they fail to load inside a Linux container.
+      - /app/node_modules
+      - /app/.next
+      - flowcms-data:/data

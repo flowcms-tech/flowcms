@@ -1,0 +1,44 @@
+name: Feature request
+description: Propose a capability FlowCMS does not have.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >-
+        What are you trying to do, and what stops you today? Describe the
+        situation rather than the solution — a proposal is much easier to judge
+        against a problem than against a preference.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: >-
+        Roughly what it would look like to use. A sketch is fine; this does not
+        have to be a design.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: >-
+        Existing settings, a custom theme, a manual workaround — and why each
+        one did not do it.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: >-
+            I have checked that this is not already listed as an outstanding
+            item in the README or in `docs/`.
+          required: false

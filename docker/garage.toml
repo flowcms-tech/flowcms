@@ -1,0 +1,47 @@
+# Single-node Garage for a self-hosted FlowCMS install.
+#
+# This is deliberately NOT a production high-availability topology.
+# `replication_factor = 1` means exactly one copy of every object: correct for
+# one node, and wrong for a cluster, where losing the node loses the data.
+# Production HA Garage is a separate operational concern — see the Garage
+# cookbook's multi-node deployment guide.
+#
+# Bootstrap is handled by Garage itself, not by an init container: the service
+# runs with `--single-node --default-bucket`, which configures the layout and
+# creates the bucket and access key from GARAGE_DEFAULT_* environment values.
+# It refuses to reconfigure a cluster that already has other nodes, so it is
+# idempotent across restarts by construction.
+
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+
+# sqlite rather than lmdb: lmdb preallocates a large sparse map file, which is
+# confusing on a developer machine and awkward inside a small volume. At
+# single-node FlowCMS scale the difference is not measurable.
+db_engine = "sqlite"
+
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+# Cluster RPC authentication. Garage requires it even for a single node. The
+# port is never published to the host and there is no second node to
+# authenticate, so this is a required formality rather than a protected secret —
+# which is why a fixed value is used instead of one that changes each restart
+# and would break a rejoining node.
+rpc_secret = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+root_domain = ".s3.garage.localhost"
+
+[s3_web]
+bind_addr = "[::]:3902"
+root_domain = ".web.garage.localhost"
+index = "index.html"
+
+[admin]
+# Bound inside the container only. The admin API can reconfigure the cluster,
+# so this port is never published to the host.
+api_bind_addr = "[::]:3903"

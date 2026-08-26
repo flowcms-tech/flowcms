@@ -1,0 +1,34 @@
+{
+  // Builds the Aurora example theme into a distributable package.
+  //
+  // Written the way a THIRD-PARTY theme author would write it, and that is the
+  // whole value of the fixture: no `paths`, no `@/*`, no reference to the
+  // FlowCMS repository. `flowcms/theme` resolves through node_modules like any
+  // other dependency. If it stopped resolving, this build would fail here —
+  // which is the failure a real theme author would hit, discovered in this
+  // repository instead of in theirs.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    // A theme author has no reason to skip checking the declarations they
+    // compile against — those declarations ARE the contract they are testing.
+    "skipLibCheck": false,
+    "declaration": true,
+    "declarationMap": false,
+    "sourceMap": false,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    // No ambient globals. A theme is a presentation package: it renders props.
+    // Anything it needed from Node or the DOM globals would be a sign it is
+    // reaching for something core should have resolved for it.
+    "types": [],
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

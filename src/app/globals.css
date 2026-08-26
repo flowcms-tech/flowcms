@@ -1,0 +1,472 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/* flowcms:template-strip:start — the example theme is a repository fixture */
+/*
+ * INSTALLED PACKAGE THEMES - one @source line each.
+ *
+ * A theme package ships markup full of Tailwind utility classes, and something
+ * has to make sure the application's Tailwind build reads them. Without that,
+ * the theme's markup renders and every one of its classes is purged: the page
+ * loads, the layout collapses, and nothing in the build says why. It is a
+ * production-only failure with no error message.
+ *
+ * WHAT WAS ACTUALLY MEASURED, on Tailwind 4.3.3 under Next 16.2.6, with the
+ * theme present ONLY as an installed package (a real directory under
+ * node_modules, its source moved out of the project tree entirely):
+ *
+ *   with this line     Aurora's `tracking-[0.4375em]` is in the production CSS
+ *   without this line  it is ALSO there
+ *
+ * So Tailwind's automatic source detection currently reaches into node_modules
+ * on its own, and this line is redundant today. It stays anyway, and the reason
+ * is not superstition: that behaviour is an implementation detail of a version
+ * of Tailwind FlowCMS does not control, it has changed across releases, and the
+ * mechanism it silently underwrites is a SUPPORTED extension point. Relying on
+ * undocumented automatic behaviour is exactly how a silent purge ships in a
+ * later upgrade, against a theme nobody in this repository can test.
+ *
+ * The path points at the package's BUILT output, which is what ships in the
+ * tarball. Pointing at src would work here and stop working for anyone who
+ * installed the package.
+ *
+ * Left in place regardless of FLOWCMS_INTEGRATION_THEMES: that variable gates
+ * whether a theme is offered to an operator, not whether the package exists.
+ * CSS has no equivalent of a runtime gate, and scanning an unused package costs
+ * one directory read at build time.
+ *
+ * See docs/distribution/packages.md for the whole installation procedure.
+ */
+@source "../../node_modules/@example/flowcms-theme-aurora/dist";
+/* flowcms:template-strip:end */
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  /* Was var(--font-vazirmatn), which nothing defined — every surface fell back
+     to the browser default. Montserrat is the default application typeface and
+     the root layout via next/font. */
+  --font-sans: var(--font-montserrat), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* The operational layer of the dispatch-board world — status codes, area
+     names, durations, numerals. Signals data, never used for prose. */
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-heading: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-destructive-light: var(--destructive-light);
+  --color-success: var(--success);
+  --color-success-light: var(--success-light);
+  --color-warning: var(--warning);
+  --color-warning-light: var(--warning-light);
+  --color-info: var(--info);
+  --color-info-light: var(--info-light);
+  --color-violet: var(--violet);
+  --color-violet-light: var(--violet-light);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  --color-indigo: var(--indigo);
+  --color-indigo-light: var(--indigo-light);
+  --color-teal: var(--teal);
+  --color-teal-light: var(--teal-light);
+  --color-rose: var(--rose);
+  --color-rose-light: var(--rose-light);
+}
+
+@utility styled-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+
+  &::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    border-radius: var(--radius-lg);
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: var(--muted-foreground);
+  }
+}
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.141 0.004 285.823);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.141 0.004 285.823);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.141 0.004 285.823);
+  --primary: oklch(0.212 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.968 0.001 286.375);
+  --secondary-foreground: oklch(0.212 0.006 285.885);
+  --muted: oklch(0.968 0.001 286.375);
+  --muted-foreground: oklch(0.552 0.016 285.938);
+  --accent: oklch(0.968 0.001 286.375);
+  --accent-foreground: oklch(0.212 0.006 285.885);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.920 0.004 286.32);
+  --input: oklch(0.920 0.004 286.32);
+  --ring: oklch(0.212 0.006 285.885);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0.002 286);
+  --sidebar-foreground: oklch(0.141 0.004 285.823);
+  --sidebar-primary: oklch(0.212 0.006 285.885);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.968 0.001 286.375);
+  --sidebar-accent-foreground: oklch(0.212 0.006 285.885);
+  --sidebar-border: oklch(0.920 0.004 286.32);
+  --sidebar-ring: oklch(0.212 0.006 285.885);
+  --destructive-light: var(--color-red-100);
+  --success: var(--color-green-600);
+  --success-light: var(--color-green-100);
+  --warning: var(--color-amber-600);
+  --warning-light: var(--color-amber-100);
+  --info: var(--color-blue-600);
+  --info-light: var(--color-blue-100);
+  --violet: var(--color-violet-600);
+  --violet-light: var(--color-violet-100);
+  --indigo: var(--color-indigo-600);
+  --indigo-light: var(--color-indigo-100);
+  --teal: var(--color-teal-600);
+  --teal-light: var(--color-teal-100);
+  --rose: var(--color-rose-600);
+  --rose-light: var(--color-rose-100);
+}
+
+/* Light · Navy — blue-tinted light theme */
+.theme-blue:not(.dark) {
+  --background: oklch(0.975 0.012 240);
+  --foreground: oklch(0.225 0.05 256);
+  --card: oklch(1 0.006 240);
+  --card-foreground: oklch(0.225 0.05 256);
+  --popover: oklch(1 0.006 240);
+  --popover-foreground: oklch(0.225 0.05 256);
+  --primary: oklch(0.5 0.18 256);
+  --primary-foreground: oklch(0.98 0.01 240);
+  --secondary: oklch(0.93 0.018 240);
+  --secondary-foreground: oklch(0.27 0.05 256);
+  --muted: oklch(0.94 0.016 240);
+  --muted-foreground: oklch(0.5 0.03 250);
+  --accent: oklch(0.91 0.03 245);
+  --accent-foreground: oklch(0.27 0.05 256);
+  --border: oklch(0.88 0.02 240);
+  --input: oklch(0.88 0.02 240);
+  --ring: oklch(0.5 0.18 256);
+  --sidebar: oklch(0.955 0.016 240);
+  --sidebar-foreground: oklch(0.27 0.05 256);
+  --sidebar-primary: oklch(0.5 0.18 256);
+  --sidebar-primary-foreground: oklch(0.98 0.01 240);
+  --sidebar-accent: oklch(0.91 0.03 245);
+  --sidebar-accent-foreground: oklch(0.27 0.05 256);
+  --sidebar-border: oklch(0.88 0.02 240);
+  --sidebar-ring: oklch(0.5 0.18 256);
+}
+
+/* Dark · Navy — near-black with a faint blue undertone */
+.dark.theme-blue {
+  --background: oklch(0.12 0.022 256);
+  --foreground: oklch(0.94 0.008 240);
+  --card: oklch(0.16 0.028 256);
+  --card-foreground: oklch(0.94 0.008 240);
+  --popover: oklch(0.16 0.028 256);
+  --popover-foreground: oklch(0.94 0.008 240);
+  --primary: oklch(0.62 0.12 254);
+  --primary-foreground: oklch(0.12 0.02 256);
+  --secondary: oklch(0.2 0.025 256);
+  --secondary-foreground: oklch(0.94 0.008 240);
+  --muted: oklch(0.19 0.022 256);
+  --muted-foreground: oklch(0.62 0.02 245);
+  --accent: oklch(0.21 0.03 256);
+  --accent-foreground: oklch(0.94 0.008 240);
+  --border: oklch(1 0 0 / 8%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.62 0.12 254);
+  --sidebar: oklch(0.14 0.024 256);
+  --sidebar-foreground: oklch(0.94 0.008 240);
+  --sidebar-primary: oklch(0.62 0.12 254);
+  --sidebar-primary-foreground: oklch(0.12 0.02 256);
+  --sidebar-accent: oklch(0.21 0.03 256);
+  --sidebar-accent-foreground: oklch(0.94 0.008 240);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.62 0.12 254);
+}
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.459 0.187 3.815);
+  --primary-foreground: oklch(0.971 0.014 343.198);
+  --secondary: oklch(0.274 0.006 286.033);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.823 0.12 346.018);
+  --chart-2: oklch(0.656 0.241 354.308);
+  --chart-3: oklch(0.592 0.249 0.584);
+  --chart-4: oklch(0.525 0.223 3.958);
+  --chart-5: oklch(0.459 0.187 3.815);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.656 0.241 354.308);
+  --sidebar-primary-foreground: oklch(0.971 0.014 343.198);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-light: oklch(0.258 0.092 26.042);
+  --success: oklch(0.792 0.209 151.711);
+  --success-light: oklch(0.266 0.065 152.934);
+  --warning: oklch(0.828 0.189 84.429);
+  --warning-light: oklch(0.279 0.077 45.635);
+  --info: oklch(0.707 0.165 254.624);
+  --info-light: oklch(0.282 0.091 267.935);
+  --violet: oklch(0.702 0.183 293.541);
+  --violet-light: oklch(0.283 0.141 291.089);
+  --indigo: oklch(0.673 0.182 276.935);
+  --indigo-light: oklch(0.257 0.09 281.288);
+  --teal: oklch(0.777 0.152 181.912);
+  --teal-light: oklch(0.277 0.046 192.524);
+  --rose: oklch(0.712 0.194 13.428);
+  --rose-light: oklch(0.271 0.105 12.094);
+}
+
+/* Outside any layer — wins over all @layer rules including Tailwind preflight */
+button:not(:disabled),
+a,
+[role="button"]:not([aria-disabled="true"]),
+label[for],
+select:not(:disabled) {
+  cursor: pointer;
+}
+
+button:disabled,
+[role="button"][aria-disabled="true"],
+select:disabled {
+  cursor: not-allowed;
+}
+
+@keyframes caret-blink {
+  0%, 70%, 100% { opacity: 1; }
+  20%, 50%      { opacity: 0; }
+}
+
+/* ---- Dispatch board field ------------------------------------------------
+   The board reads as live rather than printed. A slow sweep passes over the
+   grid like a refresh, and individual cells register briefly at staggered
+   intervals. Nothing here conveys information — it is atmosphere — so all of
+   it is suppressed under prefers-reduced-motion rather than merely slowed. */
+
+@keyframes board-sweep {
+  0%   { transform: translate3d(-35%, -35%, 0); opacity: 0; }
+  12%  { opacity: 1; }
+  88%  { opacity: 1; }
+  100% { transform: translate3d(35%, 35%, 0); opacity: 0; }
+}
+
+/* A call landing somewhere on the territory. The cell lights, the mark fades
+   up, a ring expands once, everything settles back. Deliberately unhurried —
+   this is ambient, not an alert. */
+@keyframes board-ping-cell {
+  0%, 100%   { opacity: 0; }
+  6%         { opacity: 1; }
+  38%        { opacity: 0.55; }
+  62%        { opacity: 0; }
+}
+
+@keyframes board-ping-mark {
+  0%         { opacity: 0; transform: scale(0.82); }
+  8%         { opacity: 1; transform: scale(1); }
+  46%        { opacity: 1; transform: scale(1); }
+  64%, 100%  { opacity: 0; transform: scale(1.04); }
+}
+
+@keyframes board-ping-ring {
+  0%         { opacity: 0; transform: scale(0.5); }
+  8%         { opacity: 0.75; }
+  100%       { opacity: 0; transform: scale(2.6); }
+}
+
+@keyframes board-drift {
+  0%   { transform: translate3d(0, 0, 0); }
+  50%  { transform: translate3d(0, -14px, 0); }
+  100% { transform: translate3d(0, 0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .board-sweep,
+  .board-drift,
+  .board-ping-cell,
+  .board-ping-mark,
+  .board-ping-ring {
+    animation: none !important;
+  }
+  .board-sweep,
+  .board-ping-ring,
+  .board-ping-cell { opacity: 0 !important; }
+  /* Marks stay, dimmed and still — the field keeps its texture without motion. */
+  .board-ping-mark { opacity: 0.3 !important; transform: none !important; }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* ElementEditor (TinyMCE) chrome — reskins the oxide UI via its documented
+   `--tox-private-*` CSS variables so the toolbar/menus/dialogs track whichever
+   app theme (light/dark/blue) is currently selected, live, with no JS. The
+   editable iframe content is a separate document and can't inherit these, so
+   its colors are patched imperatively — see applyAppThemeToEditor in
+   ElementEditor.tsx. */
+.tox {
+  --tox-private-background-color: var(--popover);
+  --tox-private-background-secondary: var(--muted);
+  --tox-private-border-color: var(--border);
+  --tox-private-text-color: var(--foreground);
+  --tox-private-text-color-muted: var(--muted-foreground);
+  --tox-private-sidebar-background-color: var(--popover);
+  --tox-private-floating-sidebar-background-color: var(--popover);
+  --tox-private-panel-border-radius: var(--radius);
+
+  --tox-private-button-naked-enabled-text-color: var(--foreground);
+  --tox-private-button-naked-enabled-hover-background-color: var(--accent);
+  --tox-private-button-naked-enabled-hover-text-color: var(--accent-foreground);
+  --tox-private-button-naked-enabled-active-background-color: var(--accent);
+  --tox-private-button-naked-enabled-active-text-color: var(--accent-foreground);
+  --tox-private-button-naked-active-background-color: var(--accent);
+  --tox-private-button-naked-active-text-color: var(--accent-foreground);
+  --tox-private-button-naked-focus-background-color: var(--accent);
+  --tox-private-button-naked-focus-text-color: var(--accent-foreground);
+
+  --tox-private-button-primary-background-color: var(--primary);
+  --tox-private-button-primary-border-color: var(--primary);
+  --tox-private-button-primary-text-color: var(--primary-foreground);
+  --tox-private-button-primary-enabled-background-color: var(--primary);
+  --tox-private-button-primary-enabled-border-color: var(--primary);
+  --tox-private-button-primary-enabled-text-color: var(--primary-foreground);
+  --tox-private-button-primary-enabled-hover-background-color: var(--primary);
+  --tox-private-button-primary-enabled-hover-border-color: var(--primary);
+  --tox-private-button-primary-enabled-hover-text-color: var(--primary-foreground);
+}
+
+/* ==========================================================================
+   PUBLIC SITE — scoped token layer
+   ==========================================================================
+
+   A public page opts into this class to get a design-token subtree of its own,
+   independent of the admin panel's theme.
+
+   WHY IT EXISTS
+
+   The root layout reads a `theme_scheme` cookie and stamps `dark` /
+   `theme-blue` onto <html> so an admin's chosen theme applies everywhere. That
+   is right for the admin panel and wrong for the public site: a visitor's page
+   must not change appearance because a logged-in editor prefers dark mode.
+
+   Because custom properties inherit, re-declaring the semantic tokens on a
+   wrapper element wins for that entire subtree regardless of what the root
+   carries. That is the whole mechanism, and it is worth keeping — it is how the
+   public site stays immune to admin preferences without duplicating components
+   or threading a variant prop through every one of them.
+
+   WHAT THIS IS NOT
+
+   This is not a theme, and the values below deliberately introduce no visual
+   identity: they are the app's own light palette, restated. A previous version
+   of this block carried a specific customer's brand — eleven raw colour values
+   and five scheme classes named after that customer — which is exactly the
+   thing a general-purpose CMS must not ship.
+
+   The real answer is the theme system (`src/Themes/`), where a theme owns its
+   palette and declares it here. Until that exists, this preserves the technique
+   with a neutral default and one consumer: the placeholder `/` route.
+   ========================================================================== */
+.public-surface {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.141 0.004 285.823);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.141 0.004 285.823);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.141 0.004 285.823);
+  --primary: oklch(0.212 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.968 0.001 286.375);
+  --secondary-foreground: oklch(0.212 0.006 285.885);
+  --muted: oklch(0.968 0.001 286.375);
+  --muted-foreground: oklch(0.552 0.016 285.938);
+  --accent: oklch(0.968 0.001 286.375);
+  --accent-foreground: oklch(0.212 0.006 285.885);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.920 0.004 286.32);
+  --input: oklch(0.920 0.004 286.32);
+  --ring: oklch(0.212 0.006 285.885);
+  --radius: 0.625rem;
+
+  /* Set explicitly rather than inherited: the point is to own the ground, not
+     to paint the admin's ground onto a public page. */
+  background-color: var(--background);
+  color: var(--foreground);
+}

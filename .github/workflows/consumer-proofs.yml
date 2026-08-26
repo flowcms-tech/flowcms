@@ -1,0 +1,193 @@
+# ---------------------------------------------------------------------------
+# Consumer proofs — the main tier.
+#
+# ci.yml proves the repository is healthy. This file proves that what the
+# repository PRODUCES is usable by somebody who does not have the repository.
+# Those are different claims, and inside a monorepo the first one passes for
+# reasons that have nothing to do with the second: `flowcms` and the example
+# theme resolve through `file:` links, which expose the whole source directory,
+# so every `files` mistake, every missing export and every unpublished file
+# works anyway.
+#
+#   package-consumer   packs `flowcms` and the Aurora theme, installs the
+#                      TARBALLS into a throwaway directory outside this
+#                      repository, and typechecks, executes and renders from
+#                      there. Only an installed tarball has the shape a stranger
+#                      gets.
+#
+#   generated-project  packs create-flowcms, generates a project outside this
+#                      repository, and installs, builds, typechecks and lints
+#                      it. The `docker build` leg of the same script lives in
+#                      docker.yml's `generated-image` job — one script at two
+#                      depths, not two overlapping proofs. See the note on that
+#                      job before changing either.
+#
+#   integration-build  the two gates that only a real production build can
+#                      answer: that Next's tracer carried the installed package
+#                      theme into `.next/standalone`, and that Tailwind read
+#                      source inside node_modules.
+# ---------------------------------------------------------------------------
+name: Consumer proofs
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 4 * * *"
+  # See the note on `full` in docker.yml: inside a called workflow the event
+  # context belongs to the CALLER, so a depth decision written as a check on
+  # `github.event_name` produces the wrong answer during a release.
+  workflow_call:
+    inputs:
+      full:
+        description: "The caller is running the full depth; docker.yml owns the generated project"
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "The caller is running the full depth; docker.yml owns the generated project"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: consumers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  # -------------------------------------------------------------------------
+  package-consumer:
+    name: Clean theme consumer
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --no-audit --no-fund
+
+      # The script builds and packs on its own, so there is no build step here
+      # and adding one would only create a second, drifting definition of what
+      # a release builds. It also packs React, TypeScript and the type packages
+      # out of this repository's node_modules rather than fetching them, which
+      # is why it needs the install above and why it runs offline-deterministic.
+      - name: Pack, install into a temp directory, typecheck, render
+        run: node scripts/verify-package-consumer.mjs
+
+  # -------------------------------------------------------------------------
+  generated-project:
+    name: Clean application consumer (no image build)
+    runs-on: ubuntu-24.04
+    # Only at the shallow depth — a merge to main, or a direct dispatch. On the
+    # nightly and release tiers the FULL proof (the same script including its
+    # `docker build`) runs as docker.yml's `generated-image` job, and running
+    # both would pay for the slow half twice.
+    if: ${{ !inputs.full && github.event_name != 'schedule' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --no-audit --no-fund
+
+      - name: Generate a project outside this repository and build it
+        run: node scripts/verify-create-flowcms.mjs --no-docker
+
+  # -------------------------------------------------------------------------
+  integration-build:
+    name: Package theme reaches the production build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --no-audit --no-fund
+
+      - name: Generate ephemeral build secrets
+        run: node scripts/ci/generate-test-secrets.mjs >> "$GITHUB_ENV"
+
+      # `flowcms/theme` resolves to packages/flowcms/dist, which every theme
+      # imports and Next therefore has to resolve during the build. Building it
+      # first turns a failure here into a build failure rather than a missing
+      # module three minutes later — the same ordering the Dockerfile uses.
+      - name: Build the package and the example theme
+        run: npm run build:packages
+
+      # A `file:` DEPENDENCY IS A SYMLINK, AND A SYMLINK IS NOT WHAT A THEME
+      # CONSUMER HAS.
+      #
+      # The repository declares "@example/flowcms-theme-aurora":
+      # "file:packages/flowcms-theme-aurora", so npm links node_modules/@example/…
+      # at the workspace copy. Both proofs below then measure the wrong artifact:
+      # Next's tracer follows the link and stages packages/… instead of
+      # node_modules/@example/…, and Tailwind's @source glob does not traverse
+      # it, so Aurora's utility never reaches the CSS.
+      #
+      # This passed on Windows for a reason that has nothing to do with the
+      # product: npm creates a JUNCTION there, which globbing and tracing treat
+      # as a real directory. The defect was invisible until CI ran on Linux.
+      #
+      # Packing and installing the tarball materialises exactly what
+      # `npm install <theme>` gives a third party — real files under
+      # node_modules/@example/… — which is the installation model these gates
+      # exist to prove. --no-save keeps package.json's `file:` declaration
+      # untouched, because that is what the repository's own development flow
+      # needs.
+      - name: Install the example theme as a real package, not a symlink
+        run: |
+          set -euo pipefail
+          tarball="$(npm pack ./packages/flowcms-theme-aurora --pack-destination "$RUNNER_TEMP" --silent | tail -1)"
+          npm install --no-save --no-package-lock --no-audit --no-fund "$RUNNER_TEMP/$tarball"
+          git diff --exit-code -- package-lock.json package.json
+          target=node_modules/@example/flowcms-theme-aurora
+          test -d "$target"
+          if [ -L "$target" ]; then
+            echo "::error::$target is still a symlink — the tarball install did not replace it"
+            exit 1
+          fi
+          echo "installed as a real directory: $(find "$target" -type f | wc -l) files"
+
+      # FLOWCMS_INTEGRATION_THEMES=1 is the one documented seam that registers
+      # the test themes. An ordinary install never sees it, and no generated
+      # project ever writes it.
+      - name: Production build with the package theme registered
+        env:
+          FLOWCMS_INTEGRATION_THEMES: "1"
+        run: npm run build
+
+      - name: Standalone tracing and Tailwind reach
+        run: node scripts/ci/assert-theme-tracing.mjs
+
+  # -------------------------------------------------------------------------
+  gate:
+    name: Consumer gate
+    runs-on: ubuntu-24.04
+    needs: [package-consumer, generated-project, integration-build]
+    if: always()
+    steps:
+      - name: Fail if a consumer proof failed
+        run: |
+          results='${{ join(needs.*.result, ',') }}'
+          echo "job results: $results"
+          # `skipped` is legitimate for generated-project outside a push to main.
+          case "$results" in
+            *failure*|*cancelled*)
+              echo "::error::a consumer proof did not succeed"
+              exit 1
+              ;;
+          esac
+          echo "no consumer proof failed"

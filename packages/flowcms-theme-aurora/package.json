@@ -1,0 +1,42 @@
+{
+  "name": "@example/flowcms-theme-aurora",
+  "version": "1.2.0",
+  "private": true,
+  "description": "A package-shaped FlowCMS theme, used to prove the public theme contract is sufficient on its own.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./screenshot.png": "./screenshot.png",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "screenshot.png",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "flowcms": ">=0.1.0 <0.2.0",
+    "react": "^19.0.0"
+  },
+  "scripts": {
+    "prepublishOnly": "node ./publish-guard.mjs"
+  },
+  "flowcms": {
+    "type": "theme",
+    "slug": "aurora",
+    "entry": "./dist/index.js",
+    "screenshot": "./screenshot.png"
+  },
+  "keywords": [
+    "flowcms",
+    "flowcms-theme"
+  ]
+}

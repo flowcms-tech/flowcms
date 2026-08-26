@@ -1,0 +1,163 @@
+# FlowCMS — local self-hosted stack.
+#
+#   docker compose up -d                      app + Garage (uploads work)
+#   docker compose --profile redis up -d      ... and Redis
+#
+# For a hosted S3 provider instead of the bundled Garage:
+#   docker compose -f compose.yml -f compose.external-s3.yml up -d
+#
+# For development with hot reload:
+#   docker compose -f compose.yml -f compose.dev.yml up
+#
+# Copy .env.example to .env first. Compose reads .env automatically, and the
+# `:?` guards below refuse to start rather than silently defaulting a secret.
+
+name: flowcms
+
+services:
+  app:
+    build: .
+    image: flowcms:local
+    restart: unless-stopped
+    ports:
+      # Only the application is published. Everything else stays on the Docker
+      # network — infrastructure is not exposed for convenience.
+      - "${FLOWCMS_PORT:-3000}:3000"
+    environment:
+      # Database. SQLite by default, on a named volume, never in the image.
+      # Override both to run PostgreSQL, MySQL or MariaDB (see compose.postgres.yml
+      # and friends) -- the image is identical either way.
+      DATABASE_DIALECT: ${DATABASE_DIALECT:-sqlite}
+      DATABASE_URL: ${DATABASE_URL:-file:/data/app.db}
+
+      # Phase 3: the public admin path is runtime configuration. Change it here,
+      # restart, and the panel moves — the image is not rebuilt.
+      FLOWCMS_ADMIN_PATH: ${FLOWCMS_ADMIN_PATH:-/admin}
+
+      # REQUIRED. Auth.js signs every session token with this, so whoever holds
+      # it can forge an administrator session.
+      #
+      # The `:?` guard below only proves that SOMETHING is set — it was happy
+      # with `replace-me-with-32-random-bytes-base64`, the value .env.example
+      # ships, which is published in this repository. Strength is validated by
+      # the application (Phase 7.1.2): a missing or weak value means not-ready
+      # on /api/ready, a refused first-run setup, and Auth.js given no secret
+      # rather than the rejected one.
+      #
+      # The guard is kept because failing at `docker compose up` is a faster
+      # signal than a 503 for the one case it can catch. There is no default and
+      # there must never be one.
+      #
+      # All replicas must receive the SAME value; FlowCMS never generates one.
+      AUTH_SECRET: "${AUTH_SECRET:?set AUTH_SECRET in .env - generate with: openssl rand -base64 32}"
+
+      # REQUIRED. Signs the login CAPTCHA challenge.
+      #
+      # This line used to say "optional — absent disables the login CAPTCHA".
+      # That was never true: FlowCMS has no CAPTCHA-off state, so an absent
+      # secret does not relax the login, it makes the login IMPOSSIBLE — no
+      # challenge can be issued or verified, and the admin panel becomes
+      # unreachable. The container reports itself not-ready rather than
+      # pretending otherwise.
+      #
+      # No `:?` guard, unlike AUTH_SECRET, and deliberately: an existing
+      # installation must still be able to start and serve its public site
+      # after upgrading, so this is reported through /api/ready instead of
+      # refusing to boot. There is no default value; there must not be one.
+      CAPTCHA_SECRET: ${CAPTCHA_SECRET:-}
+
+      # Optional, and it fails closed: absent PREVIEW_SECRET disables shareable
+      # draft previews entirely rather than falling back to a weak key.
+      PREVIEW_SECRET: ${PREVIEW_SECRET:-}
+
+      # Optional, and it fails closed: unset means the web first-run form at
+      # /setup is LOCKED, not open. The container still starts and serves
+      # normally, and an operator with a shell can create the first owner with
+      #   docker compose exec app node scripts/bootstrap-owner.mjs
+      # It is only consulted while the installation is uninitialized; once setup
+      # completes by either route, /setup returns 404 and this does nothing.
+      FLOWCMS_SETUP_TOKEN: ${FLOWCMS_SETUP_TOKEN:-}
+
+      # Server-side URL generation (canonicals, OG tags, sitemaps). Overridable
+      # at runtime in Admin > Settings > Global.
+      NEXT_PUBLIC_BASE_URL: ${BASE_URL:-http://localhost:3000}
+
+      # Optional. Empty means the in-process rate limiter — see the redis
+      # service below for what that costs.
+      REDIS_URL: ${REDIS_URL:-}
+
+      # Storage. Defaults target the bundled Garage service over the Docker
+      # network. `garage` is an internal hostname by design: the browser never
+      # talks to object storage directly — images are served through
+      # /api/public/images and presigned URLs are generated server-side.
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://garage:3900}
+      S3_REGION: ${S3_REGION:-garage}
+      S3_BUCKET: ${S3_BUCKET:-${GARAGE_BUCKET:-flowcms}}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-${GARAGE_ACCESS_KEY_ID:-}}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-${GARAGE_SECRET_ACCESS_KEY:-}}
+    volumes:
+      - flowcms-data:/data
+    depends_on:
+      garage:
+        condition: service_started
+        # Not required: external-S3 installs disable Garage entirely, and a hard
+        # dependency would make that topology unbootable. FlowCMS starts and
+        # reports storage as not_configured rather than failing.
+        required: false
+
+  garage:
+    image: dxflrs/garage:v2.3.0
+    restart: unless-stopped
+    # Garage bootstraps itself — no init container, no scraping credentials out
+    # of logs. `--single-node` configures the layout and refuses to run if the
+    # cluster ever gained other nodes; `--default-bucket` creates the bucket and
+    # key from the environment if they are missing. Both are idempotent, so a
+    # restart neither regenerates credentials nor disturbs existing data.
+    # The full command: the image declares no ENTRYPOINT, so `command` replaces
+    # its default Cmd (["/garage","server"]) outright rather than appending to it.
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    # THESE ARE NOT GUARDED WITH `:?`, AND THEY CANNOT BE.
+    #
+    # Compose interpolates every file it loads BEFORE it merges overrides and
+    # before it filters profiles. A `:?` here therefore fires even when Garage
+    # has been switched off — `compose.external-s3.yml` puts this service in an
+    # unused profile, but the guard has already been evaluated by then, so every
+    # `docker compose` command in an external-S3 install failed on a required
+    # variable belonging to a service that install does not run. `!reset` on the
+    # environment does not help either, for the same ordering reason.
+    #
+    # So the requirement is documented in `.env.example` and written by the
+    # installer, and a Garage install that omits them fails in Garage's own
+    # startup rather than in Compose's interpolation.
+    environment:
+      GARAGE_DEFAULT_BUCKET: ${GARAGE_BUCKET:-flowcms}
+      GARAGE_DEFAULT_ACCESS_KEY: ${GARAGE_ACCESS_KEY_ID:-}
+      GARAGE_DEFAULT_SECRET_KEY: ${GARAGE_SECRET_ACCESS_KEY:-}
+    volumes:
+      - ./docker/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    # No published ports, deliberately. 3900 (S3) is reached over the Docker
+    # network by the app; 3901 (RPC) and 3903 (admin — which can reconfigure the
+    # cluster) must not be host-reachable. Publish 3900 explicitly only if a
+    # local tool on the host genuinely needs to talk to the bucket.
+
+  redis:
+    image: redis:7-bookworm
+    restart: unless-stopped
+    # Opt-in. FlowCMS degrades correctly without Redis: the login rate limiter
+    # falls back to a per-process in-memory implementation, which still limits
+    # but is not coordinated across replicas. Enable this for anything running
+    # more than one instance; a single instance does not need it.
+    profiles: ["redis"]
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis-data:/data
+    # Internal only. An unauthenticated Redis on a published port is one of the
+    # most reliably exploited misconfigurations there is.
+
+volumes:
+  flowcms-data:
+  garage-meta:
+  garage-data:
+  redis-data:

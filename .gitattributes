@@ -1,0 +1,59 @@
+# Line endings, decided here rather than by whoever cloned the repository.
+#
+# Git for Windows installs with `core.autocrlf=true` by default, which rewrites
+# every text file to CRLF on checkout. For most of this repository that is
+# harmless. For four kinds of file it is not, and the failures do not name their
+# cause:
+#
+#   docker/entrypoint.sh    a CRLF shebang makes the kernel look for the
+#                           interpreter "/bin/sh\r", and the container exits
+#                           with "no such file or directory" naming a path that
+#                           obviously exists.
+#   Dockerfile, *.mjs bins  a `#!/usr/bin/env node\r` line fails the same way
+#                           when the file is executed directly on Linux.
+#   *.sql migrations        checksums are computed over file contents; CRLF
+#                           makes the same migration a different one.
+#   snapshot fixtures       a diff that is entirely invisible.
+#
+# `create-flowcms` copies the template byte for byte, so whatever a contributor
+# has on disk is what every generated project gets. This file ships with the
+# template for that reason: an operator who commits their new site and clones it
+# on Windows must not get a container that will not start.
+
+* text=auto eol=lf
+
+# Anything executed by a kernel or an image build. LF is not a preference here.
+*.sh            text eol=lf
+*.mjs           text eol=lf
+*.cjs           text eol=lf
+*.js            text eol=lf
+*.ts            text eol=lf
+*.tsx           text eol=lf
+*.json          text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.sql           text eol=lf
+*.css           text eol=lf
+*.md            text eol=lf
+Dockerfile      text eol=lf
+.env.example    text eol=lf
+gitignore       text eol=lf
+.gitignore      text eol=lf
+
+# Binary, and never to be "fixed". Reading a PNG as text to normalise its line
+# endings corrupts it in a way no test that does not open the file will catch.
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.webp          binary
+*.svg           text eol=lf
+*.woff          binary
+*.woff2         binary
+*.ttf           binary
+*.otf           binary
+*.pdf           binary
+*.db            binary
+*.tgz           binary
+*.lockb         binary

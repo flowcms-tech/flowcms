@@ -1,0 +1,250 @@
+# ---------------------------------------------------------------------------
+# Portability — operating systems and package managers.
+#
+# Every other workflow in this repository runs on Linux, with npm, because that
+# is what the Docker image is and what production runs. This file exists for
+# the two populations that never touch either: contributors on Windows and
+# macOS, and operators who scaffold a project with pnpm, yarn or bun.
+#
+# It closes the CI matrix that Phase 8.4 designed and deliberately did not
+# write (Phase 8.4 CI matrix design, section 11). Two ideas
+# from that design are load-bearing here:
+#
+#   1. A package manager's behaviour differs far more between MANAGERS than
+#      between operating systems, and Docker only runs on Linux runners. So:
+#      several OSes for the cheap jobs, one OS for the manager matrix. A 4x3
+#      manager x OS grid would roughly quadruple the cost to re-prove the same
+#      manager differences three times.
+#   2. Windows and macOS runners cost several times a Linux one, which is the
+#      second reason the expensive jobs stay on Linux.
+#
+# THE LOCKFILE IS NEVER REGENERATED HERE. `package-lock.json` must be the
+# Linux-generated one (ci.yml's `lockfile` job enforces that, and the Docker
+# image depends on it). The Windows and macOS jobs install FROM it. npm records
+# every platform's optional binaries in the `packages` map, so `npm ci` selects
+# the win32/darwin variants without the lockfile changing — a property this
+# file relies on and which no run has yet confirmed.
+#
+# DELIBERATE DEVIATION FROM THE 8.4 DESIGN, recorded so it is not mistaken for
+# an oversight: 8.4 put the scaffold smoke on every pull request. It is an
+# install, a production Next build, a typecheck and a lint of a generated
+# project, on the two slowest runner classes GitHub offers. That is a main-tier
+# cost, so `scaffold` runs on a push to main, nightly, and in the release tier,
+# and the cheap `unit` matrix is the part that gates a pull request. See
+# docs/ci.md.
+# ---------------------------------------------------------------------------
+name: Portability
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # 04:40 UTC — after consumer-proofs (04:00) and the database matrix (03:40),
+    # so a nightly failure is attributable to one workflow rather than to four
+    # runners competing for the same account concurrency.
+    - cron: "40 4 * * *"
+  # See the note on `full` in docker.yml. Inside a called workflow the event
+  # context is the CALLER's, so a release triggered by a `v*` tag reports
+  # `github.event_name == 'push'` — and a depth decision written against the
+  # event would silently skip the manager matrix during a release.
+  workflow_call:
+    inputs:
+      full:
+        description: "Also run the pnpm/yarn/bun matrix (slow — three scaffolds and three image builds)"
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Also run the pnpm/yarn/bun matrix (slow — three scaffolds and three image builds)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portability-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: "22"
+  NEXT_TELEMETRY_DISABLED: "1"
+  # File-wide rather than on the corepack step alone. corepack asks for
+  # confirmation before its first download, and a prompt on a runner with no
+  # stdin is a hang, not a question — including when the matrix script spawns
+  # pnpm or yarn in a temporary directory several steps later.
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+
+jobs:
+  # -------------------------------------------------------------------------
+  # The cheap OS gate, and the only portability job on a pull request.
+  #
+  # Ubuntu is NOT in this matrix: ci.yml's `test` job is the Linux leg and runs
+  # on every pull request already. Repeating it here would pay for the full
+  # suite — which builds both packages and the template first — twice per PR to
+  # learn the same thing.
+  #
+  # `npm test` runs the package builder, the example-theme builder and the
+  # template builder as three direct `node scripts/…` calls, then `vitest run`.
+  # Running vitest directly would fail the scaffolder suite, which reads the
+  # generated template, and the packaging suite, which reads
+  # packages/flowcms/dist.
+  # -------------------------------------------------------------------------
+  unit:
+    name: Suite — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # The point of two runners is to see both results. `fail-fast: true`
+      # would cancel macOS the moment Windows failed, which is precisely when
+      # knowing whether the failure is OS-specific matters most.
+      fail-fast: false
+      matrix:
+        # Pinned images, like every other job in the pipeline: a runner rollover
+        # should be a deliberate bump, not a Tuesday-morning surprise.
+        os: [windows-2022, macos-14]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # `npm ci` reads the Linux-generated lockfile and installs this OS's
+      # optional binaries from it. It must not rewrite it — `npm ci` cannot,
+      # which is the other half of why this pipeline never runs the other verb.
+      - run: npm ci --no-audit --no-fund
+
+      - name: Suite
+        run: npm test
+
+  # -------------------------------------------------------------------------
+  # THE CROSS-PLATFORM SCAFFOLD PROOF.
+  #
+  # The same script consumer-proofs.yml runs on Linux, on the two OSes where a
+  # path separator, a case-insensitive filesystem, a CRLF checkout or a missing
+  # executable bit turns into a real defect. `--no-docker` because Docker on a
+  # Windows or macOS runner needs a Linux VM; docker.yml owns that leg.
+  #
+  # Not on pull requests — see the header.
+  # -------------------------------------------------------------------------
+  scaffold:
+    name: Scaffold — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    if: ${{ inputs.full || github.event_name != 'pull_request' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, macos-14]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --no-audit --no-fund
+
+      # Packs create-flowcms, installs the TARBALL outside this repository, runs
+      # the installed bin, generates a project, then installs, builds,
+      # typechecks and lints it. Running the CLI from the repository would prove
+      # only that it works where every file it could want is already on disk.
+      - name: Generate a project outside this repository and build it
+        run: node scripts/verify-create-flowcms.mjs --no-docker
+
+  # -------------------------------------------------------------------------
+  # THE PACKAGE-MANAGER MATRIX.
+  #
+  # `verify-create-flowcms.mjs` proves npm end to end. This proves the other
+  # three, and it is the gate that can finally replace "supported" with
+  # "verified" in docs/distribution/package-managers.md — which today says
+  # pnpm and bun are Supported and yarn is Experimental precisely because
+  # nothing has ever run them.
+  #
+  # Linux only, and not on pull requests: it installs three managers, scaffolds
+  # a project per manager, builds each, and builds an image for each.
+  # -------------------------------------------------------------------------
+  package-managers:
+    name: pnpm, yarn and bun
+    runs-on: ubuntu-24.04
+    if: ${{ inputs.full || github.event_name == 'schedule' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --no-audit --no-fund
+
+      # The matrix script packs create-flowcms, so the template has to exist
+      # first; it packs `flowcms` indirectly through the generated project, so
+      # the package build has to have happened too.
+      - name: Build the publishable artifacts
+        run: |
+          npm run build:packages
+          npm run build:template
+
+      # corepack ships with Node and fetches pnpm and yarn from the npm
+      # registry — no third-party action, and no piped download. The download
+      # prompt is disabled file-wide; see the `env:` block above for why.
+      - name: Enable pnpm and yarn through corepack
+        run: |
+          corepack enable pnpm yarn
+          pnpm --version
+          yarn --version
+
+      # THE ONLY THIRD-PARTY ACTION IN THIS PIPELINE, and the reason is narrow:
+      # bun is not a corepack-managed manager, and its documented installer is
+      # `curl … | bash`, which this pipeline refuses on principle and a test
+      # pins. A vendor-published, version-pinned action is the smaller risk of
+      # the two. If it is ever removed, the matrix script reports bun as SKIPPED
+      # with a reason rather than passing silently — losing this action costs
+      # coverage, never correctness.
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # WRITTEN IN PHASE 8.4 AND NEVER EXECUTED. Its own header says so, and
+      # every "supported" in docs/distribution/package-managers.md depends on
+      # this job's first green run to become anything stronger.
+      #
+      # A manager missing from the runner is reported SKIPPED, not passed, so a
+      # broken install step above degrades the result honestly instead of
+      # inventing evidence.
+      - name: pnpm, yarn and bun scaffold, install, build and image
+        run: node scripts/verify-package-manager-matrix.mjs --managers pnpm,yarn,bun
+
+      # The matrix tags each image `flowcms-<manager>-check`. Removing them by
+      # name rather than pruning by label keeps this step from touching
+      # anything the script did not create.
+      - name: Remove the probe images
+        if: always()
+        run: |
+          for manager in pnpm yarn bun; do
+            docker rmi --force "flowcms-$manager-check" >/dev/null 2>&1 || true
+          done
+
+  # -------------------------------------------------------------------------
+  gate:
+    name: Portability gate
+    runs-on: ubuntu-24.04
+    needs: [unit, scaffold, package-managers]
+    if: always()
+    steps:
+      - name: Fail if a portability job failed
+        run: |
+          results='${{ join(needs.*.result, ',') }}'
+          echo "job results: $results"
+          # `skipped` is legitimate: on a pull request only `unit` runs, and on
+          # a push to main the manager matrix is deliberately off.
+          case "$results" in
+            *failure*|*cancelled*)
+              echo "::error::a portability job did not succeed"
+              exit 1
+              ;;
+          esac
+          echo "no portability job failed"

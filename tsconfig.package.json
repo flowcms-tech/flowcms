@@ -1,0 +1,57 @@
+{
+  // Builds the PUBLISHED `flowcms` package from the theme contract.
+  //
+  // Deliberately not an extension of tsconfig.json: that config exists to
+  // typecheck an application, with `noEmit`, `@/*` paths, the Next plugin and
+  // `skipLibCheck`. None of those may touch the package. In particular there
+  // are no `paths` here at all — a `@/…` specifier that resolved during the
+  // package build would be baked into a `.d.ts` that no consumer can resolve,
+  // and it would resolve silently. The absence of the alias is the guard.
+  //
+  // Everything under src/Themes/contract must therefore be a leaf: `react`,
+  // `clsx`, `tailwind-merge` and relative imports, nothing else. That is
+  // asserted again after emit by scripts/build-package.mjs, and a third time by
+  // tests/packaging/packageArtifact.test.ts.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    // NOT skipped, unlike the application config. A consumer compiles these
+    // declarations with their own settings; a broken one has to fail here.
+    "skipLibCheck": false,
+    "declaration": true,
+    // Omitted on purpose: a declaration map points at .ts sources that are not
+    // in the tarball, so every consumer "go to definition" would 404. Shipping
+    // the sources to fix that would publish the application's file layout.
+    "declarationMap": false,
+    "sourceMap": false,
+    "removeComments": false,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    // Exactly one ambient type package, and the narrowness is the point.
+    //
+    // The application config pulls in @types/bun and @types/node as globals; a
+    // declaration that silently referenced either would compile here and fail
+    // in a consumer's project. Listing "node" alone leaves @types/bun out (the
+    // package must never assume a Bun runtime) and admits only what
+    // `publicImageUrl` genuinely needs: `process.env.NEXT_PUBLIC_BASE_URL`.
+    //
+    // Written as that literal expression on purpose — Next inlines
+    // `process.env.NEXT_PUBLIC_*` by textual match when it bundles a dependency,
+    // and reading it through `globalThis` to dodge the type would defeat the
+    // inlining and silently return relative URLs in a client bundle.
+    //
+    // Nothing NODE-typed may reach the emitted declarations; build-package.mjs
+    // asserts that separately, so this stays a compile-time convenience rather
+    // than a dependency a theme author inherits.
+    "types": ["node"],
+    "verbatimModuleSyntax": false,
+    "rootDir": "src/Themes/contract",
+    "outDir": "packages/flowcms/dist"
+  },
+  "include": ["src/Themes/contract/**/*.ts", "src/Themes/contract/**/*.tsx"]
+}
