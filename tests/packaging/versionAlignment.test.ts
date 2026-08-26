@@ -146,18 +146,29 @@ describe("create-flowcms versions independently, on purpose", () => {
   })
 })
 
-describe("publication is still blocked, in every package", () => {
-  // packageMetadata.test.ts pins this for `flowcms`. The other two had no
-  // manifest-level coverage at all, which is how a `private` flag goes missing
-  // without a single test noticing.
+describe("only the intended packages can be published", () => {
+  // packageMetadata.test.ts pins `flowcms`. The distinction this suite draws is
+  // between the two packages that are MEANT to reach npm and the ones that must
+  // never — which is exactly the line a stray `private` removal would cross.
   const guarded = [
-    ["create-flowcms", createFlowcms, "packages/create-flowcms/publish-guard.mjs"],
-    ["aurora", aurora, "packages/flowcms-theme-aurora/publish-guard.mjs"],
+    ["create-flowcms", createFlowcms, "packages/create-flowcms/publish-guard.mjs", true],
+    ["aurora", aurora, "packages/flowcms-theme-aurora/publish-guard.mjs", false],
   ] as const
 
-  for (const [name, manifest, guardPath] of guarded) {
-    it(`${name} is private AND carries a prepublish guard that exits non-zero`, () => {
-      expect(manifest.private, `${name}: private`).toBe(true)
+  for (const [name, manifest, guardPath, publishable] of guarded) {
+    it(`${name} ${publishable ? "is publishable and guarded" : "can never be published"}`, () => {
+      if (publishable) {
+        // npm refuses a private package outright, so a publish target cannot
+        // carry the flag. Its guard is what makes the publish deliberate.
+        expect(manifest.private, `${name} is private — npm cannot publish it`).not.toBe(true)
+        expect(readText(guardPath), `${name}'s guard does not require a release`).toMatch(
+          /FLOWCMS_RELEASE/,
+        )
+      } else {
+        // Aurora is an integration fixture. It is not "not yet" publishable; it
+        // is never publishable, and the flag is the thing that says so.
+        expect(manifest.private, `${name}: private`).toBe(true)
+      }
       expect(manifest.scripts?.prepublishOnly, `${name}: prepublishOnly`).toBe(
         `node ./${guardPath.split("/").pop()}`,
       )

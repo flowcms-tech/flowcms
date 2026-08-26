@@ -34,21 +34,20 @@ const json = (p: string) => JSON.parse(read(p))
 const PUBLISHABLE = ["packages/flowcms", "packages/create-flowcms"] as const
 
 describe("publish guards", () => {
-  it.each(PUBLISHABLE)("%s is guarded twice while it declares no licence", (dir) => {
+  it.each(PUBLISHABLE)("%s declares a real licence and is not private", (dir) => {
     const manifest = json(`${dir}/package.json`)
 
     // The guards and the licence are one state, not two. A package that has
     // chosen a licence but is still `private` is a release somebody stopped
     // halfway; a package that has dropped `private` while still saying
     // UNLICENSED is a release nobody may legally use.
-    if (manifest.license === "UNLICENSED") {
-      expect(manifest.private, `${dir} says UNLICENSED but is not private`).toBe(true)
-      expect(manifest.scripts?.prepublishOnly).toBeTruthy()
-      expect(existsSync(join(ROOT, dir, "publish-guard.mjs"))).toBe(true)
-    }
+    expect(manifest.license, `${dir} declares no usable licence`).not.toBe("UNLICENSED")
+    expect(manifest.private, `${dir} is private — npm cannot publish it`).not.toBe(true)
+    expect(manifest.scripts?.prepublishOnly).toBeTruthy()
+    expect(existsSync(join(ROOT, dir, "publish-guard.mjs"))).toBe(true)
   })
 
-  it.each(PUBLISHABLE)("%s's guard names blockers and exits non-zero", (dir) => {
+  it.each(PUBLISHABLE)("%s's guard states its conditions and exits non-zero", (dir) => {
     const guardPath = `${dir}/publish-guard.mjs`
     if (!existsSync(join(ROOT, guardPath))) return // removed at the release commit, legitimately
 
@@ -56,9 +55,14 @@ describe("publish guards", () => {
     // A guard that exits 0 is a guard that does nothing, and it fails in the
     // one direction nobody checks: the publish succeeds.
     expect(guard).toContain("process.exit(1)")
-    // An empty blocker list would make the guard an unexplained refusal, which
-    // is the shape people delete rather than read.
+    // An empty condition list would make the guard an unexplained refusal,
+    // which is the shape people delete rather than read.
     expect(guard).toMatch(/BLOCKERS\s*=\s*\[[\s\S]+?\S[\s\S]*?\]/)
+    // Refusal is still the default. Only a real release lifts it, and the
+    // checks run either way.
+    expect(guard, `${dir}'s guard publishes without a release in progress`).toMatch(
+      /FLOWCMS_RELEASE/,
+    )
   })
 
   it("a root LICENSE file and an UNLICENSED manifest cannot coexist", () => {

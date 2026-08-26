@@ -1,76 +1,75 @@
 # ---------------------------------------------------------------------------
 # Release.
 #
-# PUBLICATION IS BLOCKED. Read this before editing anything below.
+# BOOTSTRAP RELEASE PATH. Nothing has been published yet. This file is what
+# performs the FIRST publication of `flowcms` and `create-flowcms`, and it is
+# deliberately hard to trigger by accident.
 #
-# Nothing in FlowCMS has ever been published, and nothing may be until a licence
-# is chosen. `package.json` says "UNLICENSED" for both `flowcms` and
-# `create-flowcms`, which is accurate — all rights reserved — and is not a
-# permission anyone can build on. `docs/distribution/packages.md`, section
-# "Release blockers", is the authoritative list.
+# CURRENT FACTS, so nobody re-derives them from a stale comment:
 #
-# There are now FOUR independent blocks between this file and npm, and they
-# fail differently on purpose:
+#   licence                GPL-2.0-or-later, in LICENSE and in both manifests
+#   repository             PUBLIC, github.com/flowcms-tech/flowcms
+#   repository metadata    repository/bugs/homepage present in both manifests
+#   npm                    NOTHING PUBLISHED YET
+#   git tag                none
+#   GitHub Release         none
+#   npm auth               bootstrap token in secrets.NPM_TOKEN, used only by
+#                          the two publish steps in the `publish` job
+#   Trusted Publishing     NOT configured — it cannot be, until the packages
+#                          exist on the registry. Configuring it, and revoking
+#                          the bootstrap token, is the step AFTER the first
+#                          publication.
 #
-#   1. `"private": true` in each package.json. npm refuses on its own.
-#   2. `prepublishOnly` → publish-guard.mjs. Exits non-zero and says WHY.
-#      npm runs it on `publish` and NOT on `pack`, so every packaging proof in
-#      the repository still runs unchanged.
-#   3. The PUBLISHING_BLOCKED step in the `publish` job below. Unconditional.
-#      A human has to delete it, in a commit, with their name on it.
-#   4. `if: ${{ false }}` on every step that could reach a registry, so even a
-#      guard that somehow did not run leaves nothing behind it that executes.
+# WHAT MAKES A PUBLICATION HAPPEN — all four, together:
 #
-# Removing any of them is a release decision, not a cleanup. Remove them
-# together, in the commit that settles the licence.
+#   1. Somebody dispatches this workflow by hand. A tag push runs the proof
+#      tiers and nothing else; an ordinary push to main does not run this file
+#      at all.
+#   2. `publish: true` on that dispatch.
+#   3. `confirm` typed to match the exact phrase the job checks.
+#   4. The `npm-publish` GitHub environment lets the job start, which is where
+#      required reviewers belong.
 #
-# WHAT THIS FILE DOES TODAY: it runs the full release proof — every gate in the
-# pipeline, including the compose topology matrix and both clean-consumer
-# proofs — so the release-readiness question can be answered honestly long
-# before the licence question is.
+# And then, per package, `prepublishOnly` -> publish-guard.mjs validates the
+# licence, the repository metadata and the built artifacts before npm sends
+# anything. Those guards no longer refuse unconditionally — they refuse unless
+# FLOWCMS_RELEASE=1, which only the publish steps below set.
 #
-# CROSS-REFERENCE: scripts/release-proof.mjs (Phase 8.5) is the canonical,
-# ordered list of what a release must prove, and the maintainer runbook is the
-# human process. This file is the WORKFLOW. It PRINTS that script's plan — plan mode
-# is the script's default and runs nothing — beside the tiers that ran those
-# stages in parallel, so a stage added to one and not the other is visible in
-# every release summary rather than silently absent. It does NOT execute the
-# orchestrator: its `needs:` have already run those stages, in parallel, with
-# five readable job results instead of one long serial log.
+# ORDER: `flowcms` first, then `create-flowcms`. Not because a generated
+# project needs the registry copy — it vendors its own, by decision — but
+# because the scaffolder ships documentation pointing theme authors at a
+# package that would otherwise not exist. The second step does not run if the
+# first fails.
 #
-# It deliberately contains no changelog logic, no version bumping and no
-# tagging.
+# PROVENANCE: `--provenance` needs a public repository, a GitHub-hosted runner,
+# `id-token: write`, and manifest `repository` metadata. All four hold. It
+# cannot be added to a version after that version is published.
 #
-# THE ORDER THIS FILE ASSUMES:
-#
-#   ...private...  guards removed -> tag created -> tag PUSHED -> this
-#                  workflow runs green, still private
-#   IRREVERSIBLE   repository made public              (blockers.md R9)
-#   ...public...   this workflow dispatched again on the tag ref, then
-#                  npm publish flowcms -> create-flowcms -> GitHub release
-#
-# The repository is public BEFORE the publishes, not after them. npm
-# provenance requires a public source repository, and a provenance publish
-# from a private one is refused rather than downgraded. Pushing a tag is
-# what triggers this file; creating one locally triggers nothing.
+# This file contains no changelog logic and no version bumping. Creating the
+# tag and the GitHub Release remains a separate, deliberate act.
 # ---------------------------------------------------------------------------
 name: Release
 
 on:
-  # A tag push runs the proof. It cannot publish — see the four blocks above.
+  # A tag push runs the proof tiers. It CANNOT publish: the publish job is
+  # gated on workflow_dispatch inputs, which a tag push does not supply.
   push:
     tags:
       - "v*"
   workflow_dispatch:
     inputs:
       publish:
-        description: "Attempt publication (WILL FAIL — publication is blocked pending a licence)"
+        description: "Publish to npm (requires the confirmation phrase below)"
         type: boolean
         default: false
+      confirm:
+        description: "Type PUBLISH FLOWCMS to confirm. Any other value refuses."
+        type: string
+        default: ""
 
-# Read-only for the whole file. Only the (blocked) publish job asks for more,
-# and it asks in its own `permissions:` block rather than raising the default
-# for every job that merely runs tests.
+# Read-only for the whole file. Only the publish job asks for more, and it asks
+# in its own `permissions:` block rather than raising the default for every job
+# that merely runs tests.
 permissions:
   contents: read
 
@@ -162,30 +161,34 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Every publish guard is still in place
+      - name: Publish preconditions the packages carry themselves
         run: |
           set -e
           fail=0
+          # The two intended packages must be publishable AND still guarded.
           for pkg in packages/flowcms packages/create-flowcms; do
-            if ! grep -q '"private": true' "$pkg/package.json"; then
-              echo "::error::$pkg/package.json is no longer private"
-              fail=1
-            fi
             if [ ! -f "$pkg/publish-guard.mjs" ]; then
-              echo "::error::$pkg/publish-guard.mjs is missing"
+              echo "::error::$pkg/publish-guard.mjs is missing - the release-safety validation is gone"
               fail=1
             fi
             if ! grep -q 'prepublishOnly' "$pkg/package.json"; then
-              echo "::error::$pkg/package.json no longer runs the publish guard"
+              echo "::error::$pkg/package.json no longer runs its publish guard"
+              fail=1
+            fi
+            if grep -q '"private": true' "$pkg/package.json"; then
+              echo "::error::$pkg/package.json is private - npm would refuse to publish it"
               fail=1
             fi
           done
-          if ! grep -q 'PUBLISHING_BLOCKED' .github/workflows/release.yml; then
-            echo "::error::the PUBLISHING_BLOCKED marker has been removed from this workflow"
-            fail=1
-          fi
+          # The packages that must NEVER be published must still be private.
+          for pkg in . packages/flowcms-theme-aurora; do
+            if ! grep -q '"private": true' "$pkg/package.json"; then
+              echo "::error::$pkg/package.json is no longer private, and it is not a publish target"
+              fail=1
+            fi
+          done
           [ "$fail" -eq 0 ] || exit 1
-          echo "all publish guards present"
+          echo "publish targets are guarded and publishable; non-targets are still private"
 
       - name: Summary
         run: |
@@ -202,94 +205,40 @@ jobs:
             echo "input that did not arrive shows up as a green run that proved"
             echo "less than it looks like it did."
             echo
-            echo "**Publication remains blocked.** No package has been published and"
-            echo "none can be until a licence is chosen. See"
-            echo "\`docs/distribution/packages.md\`, section \"Release blockers\"."
+            echo "**This proof does not publish anything.** Publication happens only"
+            echo "on a manual dispatch of this workflow with publish: true and the"
+            echo "confirmation phrase, and only through the npm-publish environment."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # -------------------------------------------------------------------------
-  # THE BLOCKED PUBLISH JOB.
+  # THE PUBLISH JOB.
   #
-  # It exists so the shape of a real release is written down and reviewable, and
-  # so that whoever eventually unblocks it changes one obvious thing rather than
-  # inventing a pipeline under time pressure on release day.
+  # Reachable only by a deliberate workflow_dispatch that sets `publish: true`
+  # AND types the confirmation phrase. A tag push supplies neither input, so it
+  # runs the proof tiers above and stops. An ordinary push to main does not
+  # trigger this file at all.
   #
-  # It runs only when somebody explicitly asks for publication, and when they do
-  # it fails on the first step. There is no input, no secret and no branch that
-  # makes it succeed.
+  # The `npm-publish` environment is the fourth gate, and the one that belongs
+  # to a person rather than to this file: configure it with required reviewers.
   # -------------------------------------------------------------------------
   publish:
-    name: npm publish (PUBLISHING_BLOCKED)
+    name: npm publish (bootstrap)
     runs-on: ubuntu-24.04
     needs: [release-proof]
-    if: ${{ inputs.publish }}
-    # A GitHub environment, so that unblocking this later also means somebody
-    # configured required reviewers and a protection rule rather than only
-    # deleting a step. The environment does not exist yet; creating it, with
-    # reviewers, is part of the release decision.
+    if: ${{ inputs.publish && inputs.confirm == 'PUBLISH FLOWCMS' }}
     environment: npm-publish
     permissions:
-      # THE ONLY ELEVATED PERMISSIONS IN THE ENTIRE PIPELINE, and they are
-      # scoped to this one job.
-      contents: write # create the GitHub Release
+      # THE ONLY ELEVATED PERMISSIONS IN THE ENTIRE PIPELINE, scoped to this job.
+      contents: write # create the GitHub Release, when that step is enabled
       id-token: write # npm provenance (OIDC), so the tarball is attestable
     steps:
       # ---------------------------------------------------------------------
-      # PUBLISHING_BLOCKED
-      #
-      # Delete this step to unblock publication. That is the deliberate act.
-      # Do not weaken it, do not add `continue-on-error`, and do not move it
-      # after another step.
-      # ---------------------------------------------------------------------
-      - name: PUBLISHING_BLOCKED
-        run: |
-          echo "::error::PUBLISHING_BLOCKED — FlowCMS may not be published yet"
-          echo ""
-          echo "  PUBLISHING_BLOCKED"
-          echo ""
-          echo "  Refusing to publish. Outstanding blockers:"
-          echo ""
-          echo "  1. No licence has been chosen. Both packages say UNLICENSED,"
-          echo "     which is accurate (all rights reserved) and is not a"
-          echo "     permission anyone can build on. This is the blocker;"
-          echo "     nothing else can be settled around it."
-          echo "  2. Local credential hygiene: data-info.txt must be deleted and"
-          echo "     anything it names rotated before a public repository exists."
-          echo "  3. flowcms must be published before create-flowcms. NOT because"
-          echo "     a generated project needs it — it vendors its own copy, by"
-          echo "     decision (docs/distribution/create-flowcms.md) — but because"
-          echo "     the scaffolder ships documentation pointing theme authors at"
-          echo "     a package that would not exist yet."
-          echo "  4. Maintainer and repository metadata (repository, bugs,"
-          echo "     homepage) is deliberately absent rather than guessed."
-          echo "  5. secrets.NPM_TOKEN does not exist, and must not be created"
-          echo "     before the above are settled."
-          echo "  6. The repository is private. It must be made public BEFORE"
-          echo "     the publishes, not after them: npm provenance requires a"
-          echo "     public source repository (blockers.md R9 and R10, and"
-          echo "     the maintainer release runbook)."
-          echo ""
-          echo "  See docs/distribution/packages.md, section 'Release blockers',"
-          echo "  and docs/ci.md, section 'Release safety'."
-          echo ""
-          exit 1
-
-      # ---------------------------------------------------------------------
       # RELEASE_PRECONDITIONS
       #
-      # NOT a fifth guard. It blocks nothing today — PUBLISHING_BLOCKED exits
-      # before it — and it is deliberately UNCONDITIONAL, with no
-      # `if: ${{ false }}`, so that it is what remains standing on the day the
-      # four guards are deleted.
-      #
-      # What it asserts is the ORDER, which outlives the guards: the repository
-      # is public before a provenance publish, and the manifests carry the
-      # `repository` field that provenance resolves and npm renders as the
-      # package's source link. Both are ordering facts that a green pipeline
-      # cannot tell you about.
-      #
-      # Reasoning: the maintainer release runbook. Ordering entries live there.
-      # R5, R9, R10. Do not delete this with the guards.
+      # Deliberately UNCONDITIONAL and first. It asserts the ORDERING facts a
+      # green pipeline cannot tell you about: the repository is public before a
+      # provenance publish, and the manifests carry the `repository` field that
+      # provenance resolves and npm renders as the package's source link.
       # ---------------------------------------------------------------------
       - name: RELEASE_PRECONDITIONS
         run: |
@@ -298,59 +247,95 @@ jobs:
           # Fails CLOSED: an absent or unexpected value is not read as public.
           private="${{ github.event.repository.private }}"
           if [ "$private" != "false" ]; then
-            echo "::error::repository visibility reads '$private' where 'false' (public) is required. npm provenance requires a public source repository and is refused rather than downgraded — make the repository public first (blockers.md R9), or publish without --provenance and make no provenance claim anywhere (README.md section 2.4)"
+            echo "::error::repository visibility reads '$private' where 'false' (public) is required. npm provenance requires a public source repository and is refused rather than downgraded"
             fail=1
           fi
           for pkg in packages/flowcms packages/create-flowcms; do
             if ! grep -q '"repository"' "$pkg/package.json"; then
-              echo "::error::$pkg/package.json carries no repository field — provenance resolves it, and npm renders it as the package's only visible link to its source (blockers.md R5)"
+              echo "::error::$pkg/package.json carries no repository field - provenance resolves it, and npm renders it as the only visible link to the source"
               fail=1
             fi
           done
           [ "$fail" -eq 0 ] || exit 1
           echo "release preconditions hold: public repository, repository metadata present"
 
-      # Everything below is UNREACHABLE twice over: PUBLISHING_BLOCKED exits 1
-      # before anything in this job runs, and each of these carries
-      # `if: ${{ false }}`. They are here as the reviewed shape of a future
-      # release, not as working steps.
       - name: Checkout
-        if: ${{ false }}
         uses: actions/checkout@v5
 
       - name: Set up Node with the npm registry
-        if: ${{ false }}
         uses: actions/setup-node@v5
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
+      # ---------------------------------------------------------------------
+      # The registry has the final say on the names, and it can change between
+      # one release attempt and the next. Checked here, immediately before
+      # publishing, rather than trusted from an earlier phase.
+      #
+      # `npm view` exits non-zero for a name that does not exist, which is the
+      # outcome we want; anything else means the name is taken.
+      # ---------------------------------------------------------------------
+      - name: The package names are still available
+        run: |
+          set -e
+          fail=0
+          for name in flowcms create-flowcms; do
+            if npm view "$name" version >/dev/null 2>&1; then
+              echo "::error::npm already has a package called '$name'. Publishing would fail or land on somebody else's name - stop and decide on a scope."
+              fail=1
+            else
+              echo "$name: available"
+            fi
+          done
+          [ "$fail" -eq 0 ] || exit 1
+
       - name: Install
-        if: ${{ false }}
         run: npm ci --no-audit --no-fund
 
       - name: Build the publishable artifacts
-        if: ${{ false }}
         run: |
           npm run build:packages
           npm run build:template
 
       - name: Artifact hygiene, immediately before publishing
-        if: ${{ false }}
         run: node scripts/verify-artifact-hygiene.mjs
 
+      # ---------------------------------------------------------------------
+      # PUBLISH. Order matters: flowcms first. If it fails the job stops and
+      # create-flowcms is never attempted - a scaffolder on the registry whose
+      # documentation points at a package that is not there is worse than
+      # neither being published.
+      #
+      # NODE_AUTH_TOKEN is scoped to these two steps only. It is never set at
+      # workflow or job level, never echoed, and never written to a summary or
+      # an artifact.
+      #
+      # FLOWCMS_RELEASE=1 tells each package's publish-guard that a real release
+      # is in progress. The guard still runs every one of its checks.
+      # ---------------------------------------------------------------------
       - name: Publish flowcms
-        if: ${{ false }}
         working-directory: packages/flowcms
         env:
-          # A NAME, not a value. This secret does not exist in this repository
-          # and must not be created until the blockers above are settled.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          FLOWCMS_RELEASE: "1"
         run: npm publish --provenance --access public
 
       - name: Publish create-flowcms
-        if: ${{ false }}
         working-directory: packages/create-flowcms
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          FLOWCMS_RELEASE: "1"
         run: npm publish --provenance --access public
+
+      # ---------------------------------------------------------------------
+      # The GitHub Release is prepared but NOT enabled. Creating it is a
+      # separate deliberate act, after the packages exist and after Trusted
+      # Publishing replaces the bootstrap token. Enabling it means removing the
+      # `if: ${{ false }}` below, in a commit, with a name on it.
+      # ---------------------------------------------------------------------
+      - name: Create the GitHub Release
+        if: ${{ false }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" --verify-tag --notes-file CHANGELOG.md

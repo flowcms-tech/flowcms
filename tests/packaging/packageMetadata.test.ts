@@ -48,20 +48,26 @@ describe("the distribution model", () => {
   })
 })
 
-describe("publishing is deliberately blocked", () => {
-  it("the package is private AND carries a prepublish guard", () => {
-    // Two guards, because they fail differently. `private` is one word somebody
-    // removes while tidying; the script says why it is there.
-    expect(flowcms.private).toBe(true)
+describe("publishing is deliberate, not merely possible", () => {
+  it("the package is publishable but still runs its prepublish guard", () => {
+    // `private` was removed when the bootstrap release path was prepared — npm
+    // refuses to publish a private package at all, so it could not stay. The
+    // guard is what replaced it, and it must not quietly disappear too.
+    expect(flowcms.private, "flowcms is private again — npm cannot publish it").not.toBe(true)
     expect(flowcms.scripts?.prepublishOnly).toBeTruthy()
     expect(existsSync(join(ROOT, "packages/flowcms/publish-guard.mjs"))).toBe(true)
   })
 
-  it("the guard fails rather than warns", () => {
+  it("the guard fails rather than warns, and refuses outside a release", () => {
     const guard = readFileSync(join(ROOT, "packages/flowcms/publish-guard.mjs"), "utf8")
     expect(guard).toMatch(/process\.exit\(1\)/)
     // It must name the reason, not just refuse.
     expect(guard.toLowerCase()).toMatch(/licen[cs]e/)
+    // The default is still refusal: a hand-run `npm publish` from a laptop has
+    // no FLOWCMS_RELEASE, and must not reach the registry.
+    expect(guard, "the guard no longer requires a real release to be in progress").toMatch(
+      /FLOWCMS_RELEASE/,
+    )
   })
 
   it("runs on publish and NOT on pack", () => {

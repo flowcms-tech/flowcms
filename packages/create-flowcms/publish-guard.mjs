@@ -1,87 +1,108 @@
 /**
- * Refuses `npm publish` of create-flowcms while release prerequisites are unresolved.
+ * Release-safety validation for `npm publish` of `create-flowcms`.
  *
  * Runs from `prepublishOnly`, which npm invokes on `publish` and NOT on `pack`
  * — so every packaging proof in the repository still runs unchanged, and only
- * the irreversible step is blocked.
+ * the irreversible step is validated.
  *
- * This is the second of two guards. The first is `"private": true` in
- * package.json, which npm refuses to publish on its own. Two guards because
- * they fail differently: `private` is one word somebody removes while tidying,
- * and this script says WHY it is there.
+ * WHAT CHANGED, AND WHY IT IS STILL A GUARD.
  *
- * Deleting either one is a release decision, not a cleanup.
+ * This script used to refuse unconditionally. The licence is now settled
+ * (GPL-2.0-or-later), the repository is public and carries its metadata, and
+ * the owner has authorised a first publication, so an unconditional refusal
+ * would now be a lie. The honest replacement is a guard that checks what must
+ * be true at the moment of publishing.
  *
- * IT REFUSES UNCONDITIONALLY — no override flag, no environment escape hatch.
- * See the note in packages/flowcms/publish-guard.mjs.
+ * It still refuses by default: `npm publish` by hand, from a laptop, with no
+ * release in progress fails exactly as before. Publication requires
+ * FLOWCMS_RELEASE=1, which only the `publish` job in
+ * .github/workflows/release.yml sets, behind an explicit workflow_dispatch, a
+ * typed confirmation phrase and the `npm-publish` environment.
+ *
+ * ORDERING. `flowcms` must reach the registry first. Not because a generated
+ * project needs it — it vendors its own copy, by decision — but because this
+ * scaffolder ships documentation pointing theme authors at a package that would
+ * not exist yet. The release workflow publishes them in order and stops if the
+ * first fails; this guard states the rule so a hand-run cannot invert it.
  */
 
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-
-const BLOCKERS = [
-  // Phase 9.1 settled the licence (GPL-2.0-or-later) and the repository and
-  // maintainer metadata. Those two entries are gone because they are done, not
-  // because the bar was lowered.
-  // Phase 9.2: the repository is now PUBLIC and @flowcms-tech exists with 2FA
-  // enforced. Those entries are gone because they are done. Provenance being
-  // POSSIBLE is not provenance being CONFIGURED.
-  "npm provenance is not configured and has never produced an attestation. " +
-    "The repository is public and the organisation enforces 2FA, so it is now " +
-    "possible — and it cannot be added to a version after publication.",
-  "The public repository is still EMPTY: nothing has been pushed, so no " +
-    "workflow has ever run and no release has ever been rehearsed.",
-  "`flowcms` is not published yet, and `create-flowcms` must not go first. " +
-    "Generated v0.1 projects vendoring a local copy is the DELIBERATE model " +
-    "(Option A, docs/distribution/create-flowcms.md) — that part is no longer a " +
-    "defect. What is still true is that theme authors are pointed at `flowcms` " +
-    "on the registry, so a scaffolder published ahead of it documents an import " +
-    "nobody can resolve.",
-  "Release automation exists but has NEVER RUN: six workflows, a " +
-    "published-artifact gate and a release proof, none of which has executed on " +
-    "a real commit — there is no remote to run them on. A publish today is still " +
-    "one person's laptop and whatever was in it.",
-  "The npm name `create-flowcms` has never been checked against the registry. " +
-    "`npm create flowcms` resolves to exactly that name and no other, so the " +
-    "documented invocation depends on a name nobody has confirmed is free.",
-]
-
-console.error("\nRefusing to publish `create-flowcms`.\n")
-for (const blocker of BLOCKERS) console.error(`  - ${blocker}`)
+const REPO = "https://github.com/flowcms-tech/flowcms"
 
 /**
- * Say so loudly if the OTHER guard is already gone. See the sibling guard.
+ * Conditions that must hold before this package may reach the registry.
  */
-try {
-  const manifest = JSON.parse(readFileSync(join(HERE, "package.json"), "utf8"))
-  if (manifest.private !== true) {
-    console.error(
-      '\n  !! `"private": true` has been REMOVED from packages/create-flowcms/package.json.\n' +
-        "     This script is now the only guard. Restore it, or finish the release\n" +
-        "     decisions above and delete both together.",
-    )
-  }
-  // Watches for drift away from the DECIDED licence (GPL-2.0-or-later,
-  // Phase 9.1), not away from "UNLICENSED".
-  if (manifest.license !== "GPL-2.0-or-later") {
-    console.error(
-      `\n  !! package.json now declares license "${manifest.license}".\n` +
-        "     If that was a real decision, record it in dev-docs/decisions/ and\n" +
-        "     make the LICENSE file agree before publishing. If it was not,\n" +
-        "     revert it — it is a legal claim.",
-    )
-  }
-} catch {
-  // A guard that crashes while reading its own manifest must still refuse.
+const BLOCKERS = [
+  "A release must be deliberate: FLOWCMS_RELEASE=1 is set only by the release workflow's publish job.",
+  "`flowcms` must be published before `create-flowcms`, because this package's documentation points theme authors at it.",
+  "The licence must still be GPL-2.0-or-later, matching the repository LICENSE file.",
+  "The manifest must carry the repository metadata npm provenance resolves and npm renders as the source link.",
+  "The generated application template must have been built — a scaffolder with no template produces an empty project.",
+]
+
+const problems = []
+
+if (process.env.FLOWCMS_RELEASE !== "1") {
+  problems.push(
+    "This is not a release. `npm publish` is refused unless FLOWCMS_RELEASE=1, which\n" +
+      "     only the publish job in .github/workflows/release.yml sets. If you meant to\n" +
+      "     release, dispatch that workflow — do not set the variable by hand.",
+  )
 }
 
-console.error(
-  "\nSee docs/distribution/create-flowcms.md, “Release blockers” in " +
-    "docs/distribution/packages.md. " +
-    "When those are settled, remove `private` and this guard together, in the " +
-    "commit that settles them.\n",
-)
-process.exit(1)
+let manifest
+try {
+  manifest = JSON.parse(readFileSync(join(HERE, "package.json"), "utf8"))
+} catch {
+  problems.push("package.json could not be read, so nothing about it could be verified.")
+}
+
+if (manifest) {
+  if (manifest.license !== "GPL-2.0-or-later") {
+    problems.push(
+      `package.json declares license "${manifest.license}", not the GPL-2.0-or-later\n` +
+        "     this project is released under. A licence string is a legal claim: if this\n" +
+        "     is a deliberate change, make the repository LICENSE file agree before\n" +
+        "     publishing. If it is not, revert it.",
+    )
+  }
+  if (manifest.private === true) {
+    problems.push('`"private": true` is set, so npm would refuse this publish anyway.')
+  }
+  if (!manifest.version) {
+    problems.push("package.json declares no version.")
+  }
+  const url = manifest.repository?.url ?? ""
+  if (!url.includes("github.com/flowcms-tech/flowcms")) {
+    problems.push(
+      `repository.url is "${url}", which is not ${REPO}. Provenance resolves this field,\n` +
+        "     and npm renders it as the package's only visible link back to its source.",
+    )
+  }
+  for (const entry of manifest.files ?? []) {
+    if (entry === "README.md") continue
+    if (!existsSync(join(HERE, entry))) {
+      problems.push(
+        `the \`files\` allowlist promises "${entry}", which does not exist. Run\n` +
+          "     `npm run build:template` before publishing.",
+      )
+    }
+  }
+}
+
+if (problems.length > 0) {
+  console.error("\nRefusing to publish `create-flowcms`.\n")
+  for (const problem of problems) console.error(`  - ${problem}`)
+  console.error(
+    "\nThe conditions this guard enforces:\n" +
+      BLOCKERS.map((b) => `  - ${b}`).join("\n") +
+      "\n\nSee docs/distribution/create-flowcms.md.\n",
+  )
+  process.exit(1)
+}
+
+console.error("[publish-guard] create-flowcms: release conditions hold — proceeding.\n")

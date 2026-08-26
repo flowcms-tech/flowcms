@@ -358,13 +358,15 @@ this document will not claim they work until they have been. The future
 
 ## Release blockers
 
-Publishing is blocked twice: `"private": true` on the package, and a
-`prepublishOnly` guard that exits non-zero and says why. `npm pack` is
-unaffected, so every proof above still runs. The same pair guards
-`create-flowcms`. `@example/flowcms-theme-aurora` carries a guard too, but it is
-a different kind: the other two say *not yet*, Aurora's says *never* — it is an
-integration fixture and is not a package this project would publish under any
-circumstances.
+Nothing has been published yet. `flowcms` and `create-flowcms` are publishable
+when the release workflow is deliberately dispatched, and their `prepublishOnly`
+guards validate the licence, the repository metadata and the built artifacts
+before npm sends anything — refusing outright unless a real release is in
+progress, so a hand-run `npm publish` fails. `npm pack` is unaffected, so every
+proof above still runs. `@example/flowcms-theme-aurora` carries a guard of a
+different kind, alongside `"private": true`: the other two say *not yet*,
+Aurora's says *never* — it is an integration fixture and is not a package this
+project would publish under any circumstances.
 
 Still open before `flowcms` can be published:
 

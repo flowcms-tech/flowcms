@@ -362,33 +362,10 @@ describe("docker gates", () => {
 describe("release safety", () => {
   const raw = () => read(RELEASE)
 
-  it("carries the PUBLISHING_BLOCKED marker", () => {
-    // The marker a human must delete, deliberately, in a commit with their name
-    // on it. If this test ever fails, publication was unblocked — confirm that
-    // was a decision and not a merge accident.
-    expect(raw()).toMatch(/PUBLISHING_BLOCKED/)
-  })
-
-  it("fails hard rather than skipping when publication is requested", () => {
-    const text = raw()
-    const at = text.indexOf("name: PUBLISHING_BLOCKED")
-    expect(at, "the guard step is missing").toBeGreaterThan(-1)
-    const guard = text.slice(at, at + 2500)
-    expect(guard).toMatch(/exit 1/)
-    expect(guard, "the guard is allowed to fail softly").not.toMatch(/continue-on-error/)
-  })
-
-  it("leaves every registry-reaching step unreachable a second time", () => {
-    const text = raw()
-    const publishes = [...text.matchAll(/run: npm publish/g)]
-    expect(publishes.length, "release.yml has no publish step to guard").toBeGreaterThan(0)
-    for (const match of publishes) {
-      const preceding = text.slice(Math.max(0, match.index - 400), match.index)
-      expect(preceding, "a publish step is not guarded by `if: ${{ false }}`").toMatch(
-        /if:\s*\$\{\{\s*false\s*\}\}/,
-      )
-    }
-  })
+  // Publication is no longer blocked outright — the bootstrap release path is
+  // live. What these assert is that it stays DELIBERATE: four independent
+  // things must line up before anything reaches the registry, and none of them
+  // is something an ordinary push or a merge can supply.
 
   it("does not publish merely because code reached main", () => {
     const text = withoutComments(raw())
@@ -397,14 +374,109 @@ describe("release safety", () => {
     expect(text, "release.yml triggers on a branch push").not.toMatch(/branches: \[main\]/)
   })
 
-  it("gates the publish job behind an explicit opt-in input", () => {
-    expect(withoutComments(raw())).toMatch(/if: \$\{\{ inputs\.publish \}\}/)
+  it("gates publication behind an explicit opt-in AND a typed confirmation", () => {
+    // A boolean alone is one mis-click. The phrase is what makes the dispatch
+    // an act rather than an accident, and a tag push supplies neither input.
+    const text = withoutComments(raw())
+    expect(text, "the publish job is not gated on inputs.publish").toMatch(/inputs\.publish/)
+    expect(text, "the publish job takes no confirmation phrase").toMatch(
+      /inputs\.confirm == '[^']+'/,
+    )
+    expect(text, "release.yml declares no confirm input").toMatch(/confirm:/)
+  })
+
+  it("runs publication inside a protected environment on a GitHub-hosted runner", () => {
+    const text = withoutComments(raw())
+    // `\n  publish:` and not `  publish:` — the latter also matches the
+    // `publish:` workflow_dispatch INPUT, which is indented further.
+    const at = text.indexOf("\n  publish:")
+    expect(at, "release.yml has no publish job").toBeGreaterThan(-1)
+    const job = text.slice(at, at + 900)
+    // The environment is where required reviewers live — the one gate that
+    // belongs to a person rather than to this file.
+    expect(job, "the publish job is not bound to the npm-publish environment").toMatch(
+      /environment: npm-publish/,
+    )
+    // Provenance is refused on a self-hosted runner.
+    expect(job, "the publish job does not run on a GitHub-hosted Linux runner").toMatch(
+      /runs-on: ubuntu-/,
+    )
+  })
+
+  it("publishes both packages with provenance, public access, flowcms first", () => {
+    const text = raw()
+    const publishes = [...text.matchAll(/run: npm publish[^\n]*/g)]
+    expect(publishes.length, "release.yml has no publish step").toBe(2)
+    for (const match of publishes) {
+      expect(match[0], "a publish step drops --provenance or --access public").toMatch(
+        /--provenance/,
+      )
+      expect(match[0]).toMatch(/--access public/)
+    }
+    // Order is not cosmetic: create-flowcms ships documentation pointing theme
+    // authors at `flowcms`, so a scaffolder published first documents a package
+    // that does not exist.
+    const first = text.indexOf("working-directory: packages/flowcms")
+    const second = text.indexOf("working-directory: packages/create-flowcms")
+    expect(first, "flowcms is not published from its own directory").toBeGreaterThan(-1)
+    expect(second, "create-flowcms is not published from its own directory").toBeGreaterThan(-1)
+    expect(first, "create-flowcms is published before flowcms").toBeLessThan(second)
+  })
+
+  it("keeps the npm token out of everything except the publish commands", () => {
+    const text = withoutComments(raw())
+    const uses = [...text.matchAll(/NODE_AUTH_TOKEN/g)]
+    // Exactly the two publish steps. A workflow-level or job-level env block
+    // would hand the token to every step, including third-party actions.
+    expect(uses.length, "NODE_AUTH_TOKEN appears somewhere other than the two publish steps").toBe(
+      2,
+    )
+    expect(text, "the token is echoed or summarised").not.toMatch(
+      /echo[^\n]*(NODE_AUTH_TOKEN|NPM_TOKEN)/,
+    )
+    expect(text, "npm auth configuration is dumped to the log").not.toMatch(/npm config list/)
+  })
+
+  it("scopes id-token: write to the publish job alone", () => {
+    const text = withoutComments(raw())
+    const grants = [...text.matchAll(/id-token: write/g)]
+    expect(grants.length, "id-token: write is granted more than once").toBe(1)
+    const at = text.indexOf("\n  publish:")
+    expect(grants[0].index, "id-token: write is granted outside the publish job").toBeGreaterThan(
+      at,
+    )
   })
 
   it("asserts the package-level publish guards are still in place", () => {
+    // The guards are no longer absolute blockers, but they must still exist and
+    // still run: they validate licence, repository metadata and built artifacts
+    // at the moment of publishing.
+    expect(raw()).toMatch(/publish-guard\.mjs/)
+    expect(raw()).toMatch(/prepublishOnly/)
+  })
+
+  it("checks the packages that must never be published are still private", () => {
     const text = raw()
-    expect(text).toMatch(/publish-guard\.mjs/)
-    expect(text).toMatch(/"private": true/)
+    expect(text, "release.yml no longer checks that non-targets stay private").toMatch(
+      /"private": true/,
+    )
+    expect(text).toMatch(/flowcms-theme-aurora/)
+  })
+
+  it("verifies the npm names immediately before publishing", () => {
+    // The registry can change between one release attempt and the next, so this
+    // belongs in the publish job rather than in an earlier phase's notes.
+    expect(withoutComments(raw())).toMatch(/npm view/)
+  })
+
+  it("leaves the GitHub Release step unreachable until it is deliberately enabled", () => {
+    const text = raw()
+    const at = text.indexOf("name: Create the GitHub Release")
+    if (at === -1) return // not prepared yet, which is also a valid state
+    expect(
+      text.slice(at, at + 300),
+      "the GitHub Release step is reachable before anyone enabled it",
+    ).toMatch(/if:\s*\$\{\{\s*false\s*\}\}/)
   })
 
   it("runs every tier of the pipeline as the release proof", () => {

@@ -239,15 +239,14 @@ triggers nothing, so creating the tag and pushing it are separate steps. It **ca
 reusable workflows rather than copying their job lists, so a gate cannot pass on
 `main` and be quietly absent from a release.
 
-It then asserts that every package-level publish guard is still in place, and
-writes a summary that says publication is blocked.
+It then asserts that the two publish targets are guarded and publishable while
+the packages that must never be published are still private, and writes a
+summary saying the proof published nothing.
 
-The blocked `publish` job carries one step that is **not** a guard:
-`RELEASE_PRECONDITIONS`, unconditional and second, after `PUBLISHING_BLOCKED`.
-It never runs today because the step above it exits first, and it exists for the
-day the guards are deleted — it asserts the two *ordering* facts that outlive
-them: the repository is public, and both manifests carry `repository`. It fails
-closed on a visibility it cannot read. Removing it along with the guards removes
+The `publish` job opens with `RELEASE_PRECONDITIONS`, unconditional and first.
+It asserts the two *ordering* facts a green pipeline cannot tell you about: the
+repository is public, and both manifests carry `repository`. It fails
+closed on a visibility it cannot read. Removing it removes
 the only automated memory of why the publication order is what it is.
 
 ### The release-proof plan, printed beside the tiers
@@ -309,33 +308,30 @@ run. The job belongs in the commit that lifts the publish blocks.
 
 ## Release safety
 
-**Publication is blocked.** Nothing in FlowCMS has ever been published. The
-licence question is settled — `flowcms` and `create-flowcms` both declare
-`"license": "GPL-2.0-or-later"` — but the publish blocks below stay armed until
-the release is deliberately cut.
+**Nothing has been published yet.** Publication is possible but deliberately
+hard to reach: it takes four independent things lining up, and no ordinary push
+or merge can supply any of them.
 
-There are four independent blocks between this repository and npm, and they fail
-differently on purpose:
+1. **A manual dispatch of `release.yml`.** A `v*` tag push runs the proof tiers
+   and stops there; an ordinary push to `main` does not trigger the file at all.
+2. **`publish: true`** on that dispatch.
+3. **A typed confirmation phrase** on the same dispatch. A boolean alone is one
+   mis-click.
+4. **The `npm-publish` GitHub environment**, which is where required reviewers
+   belong — the one gate that is a person rather than a file.
 
-1. **`"private": true`** in each package.json. npm refuses on its own.
-2. **`prepublishOnly` → `publish-guard.mjs`.** Exits non-zero and says *why*.
-   npm runs it on `publish` and **not** on `pack`, so every packaging proof in
-   the repository still runs unchanged.
-3. **The `PUBLISHING_BLOCKED` step** in `release.yml`'s `publish` job.
-   Unconditional, first in the job, `exit 1`. A human has to delete it, in a
-   commit, with their name on it.
-4. **`if: ${{ false }}`** on every step that could reach a registry, so even a
-   guard that somehow did not run leaves nothing behind it that executes.
+Then, per package, `prepublishOnly` → `publish-guard.mjs` validates the licence,
+the repository metadata and the built artifacts before npm sends anything. Those
+guards refuse by default: a hand-run `npm publish` from a laptop fails, because
+only the release job marks a release as being in progress. npm runs them on
+`publish` and **not** on `pack`, so every packaging proof still runs unchanged.
 
-The `publish` job additionally only runs when somebody explicitly passes
-`publish: true` to a manual dispatch, and it targets a GitHub environment
-(`npm-publish`) that does not exist yet — creating it, **with required
-reviewers**, is part of the release decision rather than a side effect of
-unblocking.
+The two packages publish in order — `flowcms`, then `create-flowcms` — and the
+second does not run if the first fails.
 
-`secrets.NPM_TOKEN` appears once, as a name. **It does not exist in this
-repository and must not be created** before the blockers in
-`docs/distribution/packages.md` § "Release blockers" are settled.
+`secrets.NPM_TOKEN` is a bootstrap credential, reachable only by the two publish
+steps: never at workflow level, never at job level, never echoed, and never
+written to a summary or an artifact.
 
 Reaching `main` publishes nothing. `release.yml` has no branch trigger at all.
 

@@ -13,7 +13,6 @@
   "bugs": {
     "url": "https://github.com/flowcms-tech/flowcms/issues"
   },
-  "private": true,
   "type": "module",
   "bin": {
     "create-flowcms": "./bin/create-flowcms.mjs"
