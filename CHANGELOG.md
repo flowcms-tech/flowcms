@@ -5,17 +5,56 @@ All notable changes to FlowCMS are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-> **Nothing has been released yet** (see
-> [Project status](README.md#project-status)). `0.1.0` below is a *preparation*
-> section describing what the first release will contain when it happens — it is
-> not a shipped version and carries no date. Do not add a date, a tag reference
-> or a comparison link to it until the release is actually cut.
-
 ## [Unreleased]
 
-Nothing yet. Changes made after `0.1.0` is cut go here.
+Nothing yet.
 
-## [0.1.0] — preparation, not yet released
+## [0.1.1] — 2026-08-27
+
+A CLI release. The application itself is unchanged; everything below is
+`create-flowcms`, plus one validation fix that decides what a generated `.env`
+contains.
+
+### Changed
+
+- **The `create-flowcms` interactive installer is rebuilt on
+  [`@clack/prompts`](https://www.npmjs.com/package/@clack/prompts).** Choices
+  are navigated with ↑/↓ and Enter rather than typed as numbers, a submitted
+  answer collapses to a single line, and the pre-flight configuration and the
+  closing next-steps are shown as framed blocks. Scaffolding steps report
+  through a spinner, and the run ends with a summary rather than trailing
+  output.
+- **`@clack/prompts` is now a dependency of `create-flowcms`** — its first, and
+  the only one it has. The package's "zero dependencies" rule becomes "one,
+  named": a second bare import fails the test suite.
+- The masked prompts no longer warn that input might be echoed. They do not
+  need to: the mask is drawn rather than raced against the terminal's own echo,
+  so there is no longer a terminal state in which masking silently stops.
+
+### Fixed
+
+- **A local deployment of PostgreSQL, MySQL or MariaDB with an empty external
+  database URL no longer produces a broken `DATABASE_URL`.** Pressing Enter at
+  the connection-URL prompt returned an empty string, which was falsy in every
+  check downstream; the generated `.env` then received
+  `postgresql://flowcms:null@localhost:5432/flowcms` — a literal `null`
+  password — with nothing reported. The URL is now required at the prompt and
+  the configuration is refused by validation if it is missing.
+- An interrupted prompt whose terminal goes away — rather than being cancelled
+  with Ctrl+C — no longer leaves the installer waiting forever.
+
+### Unchanged, deliberately
+
+- **Non-interactive and CI behaviour is byte-for-byte what it was.** A run
+  without a TTY prints the same plain lines, emits no ANSI escapes, and still
+  refuses to guess: missing configuration is a usage error naming the flag.
+- Every CLI flag, every `FLOWCMS_INSTALL_*` variable, the destination safety
+  rules, secret generation, template copying, `.env` and Compose rendering,
+  package-manager detection and spawning, cleanup ownership, `--skip-install`,
+  and every exit code — including `130` for an interrupted run and the rule
+  that a failed dependency install keeps the generated project.
+
+## [0.1.0] — 2026-08-27
 
 The first public release of FlowCMS: a self-hosted CMS that is a genuine
 fullstack application — a public themed site and an admin panel, with its own

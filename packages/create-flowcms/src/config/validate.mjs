@@ -111,6 +111,26 @@ export function validateConfig(config) {
 
   // -- External database -----------------------------------------------------
 
+  // ABSENT AND EMPTY ARE THE SAME FAILURE, and saying so is the whole point of
+  // this rule. A server database outside Docker has no Compose service for the
+  // installer to create, so the URL is the operator's to supply.
+  // `missingSecrets()` already refuses a non-interactive run without one — but
+  // the interactive path could arrive here with `""`, because a masked prompt
+  // returns an empty string for a bare enter and `""` is falsy in the check
+  // below. Nothing objected, and `buildDatabaseEnv` then took the MANAGED
+  // branch, whose password is null outside Docker, and rendered
+  // `postgresql://flowcms:null@localhost:5432/flowcms` into a real `.env`.
+  if (
+    config.database !== "sqlite" &&
+    config.deploymentMode === "local" &&
+    !config.externalDatabaseUrl
+  ) {
+    problems.push(
+      "A local deployment of a server database needs a database URL: there is no " +
+        "Compose service for the installer to create, so the database is yours.",
+    )
+  }
+
   if (config.externalDatabaseUrl) {
     if (config.database === "sqlite") {
       problems.push("SQLite is a file, not a server; it takes no external database URL.")

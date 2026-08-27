@@ -285,12 +285,27 @@ describe("the CLI stays a standalone, dependency-free package", () => {
     expect(files.length).toBeGreaterThanOrEqual(14)
   })
 
-  it("imports only Node builtins and its own files", () => {
-    // Still zero dependencies after adding an interactive installer: seven
-    // questions do not justify a supply chain.
+  /**
+   * ONE dependency, named here and nowhere else.
+   *
+   * The rule used to be zero, and the argument for it was that seven questions
+   * did not justify a supply chain. That held while the questions were
+   * line-oriented. It stopped holding when they had to be NAVIGABLE: arrow
+   * keys, a redrawn option list, collapsed answers and a cancel that is a
+   * resolved symbol rather than an exception are a terminal-UI toolkit, and a
+   * hand-rolled one is where a rendering bug lands on somebody else's terminal.
+   *
+   * An allowlist rather than a deletion, because the property still worth
+   * having is that the SECOND dependency is a test failure.
+   */
+  const ALLOWED_DEPENDENCIES = ["@clack/prompts"]
+
+  it("imports only Node builtins, its own files, and the one allowed dependency", () => {
     for (const file of files) {
       for (const match of code(readFileSync(file, "utf8")).matchAll(IMPORT)) {
-        expect(match[1], `${file} imports ${match[1]}`).toMatch(/^node:|^\.\.?\//)
+        const specifier = match[1]
+        if (ALLOWED_DEPENDENCIES.includes(specifier)) continue
+        expect(specifier, `${file} imports ${specifier}`).toMatch(/^node:|^\.\.?\//)
       }
     }
   })
@@ -301,9 +316,13 @@ describe("the CLI stays a standalone, dependency-free package", () => {
     }
   })
 
-  it("declares no dependencies", () => {
+  it("declares exactly the dependencies it imports, and no devDependencies", () => {
+    // The manifest and the import guard above have to agree. A dependency
+    // declared but unused is a supply chain nobody is getting anything for; a
+    // dependency imported but undeclared is a package that fails to resolve on
+    // the first stranger's machine and works perfectly on ours.
     const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"))
-    expect(manifest.dependencies).toBeUndefined()
+    expect(Object.keys(manifest.dependencies ?? {})).toEqual(ALLOWED_DEPENDENCIES)
     expect(manifest.devDependencies).toBeUndefined()
   })
 

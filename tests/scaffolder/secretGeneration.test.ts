@@ -116,17 +116,21 @@ describe("the CLI stays a standalone package", () => {
     }
   })
 
-  it("imports nothing outside Node's own modules", () => {
-    // Zero dependencies is the design: an argument parser or a prompt library
-    // would be a version to track and a supply chain to trust, bought for
-    // something forty lines already does.
+  it("imports nothing outside Node's own modules and the one allowed dependency", () => {
+    // ONE dependency, `@clack/prompts`, which is the interactive UI and nothing
+    // else. The argument-parsing rule is unchanged and still holds: forty lines
+    // already do it, and a table is not a supply chain. What changed is that
+    // drawing a navigable prompt is not forty lines, and getting it wrong shows
+    // up on somebody else's terminal rather than in a test.
+    //
     // Node builtins, or a relative path within the package. The bin genuinely
-    // imports `../src/cli.mjs`; what must not appear is a BARE specifier, which
-    // would be a dependency, or a path reaching out of the package, which the
-    // test above forbids separately.
+    // imports `../src/cli.mjs`; what must not appear is a SECOND bare
+    // specifier, or a path reaching out of the package, which the test above
+    // forbids separately.
     const allowed = /^node:|^\.\.?\//
     for (const file of files) {
       for (const match of code(readFileSync(file, "utf8")).matchAll(IMPORT)) {
+        if (match[1] === "@clack/prompts") continue
         expect(match[1], `${file} imports ${match[1]}`).toMatch(allowed)
       }
     }

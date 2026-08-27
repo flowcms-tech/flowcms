@@ -33,16 +33,28 @@ packages/create-flowcms/
   src/*.mjs                  arg parsing, destination safety, copy, package managers
   src/config/*.mjs           the deployment model, validation and secrets
   src/prompts/interactive.mjs  the TTY installer
+  src/prompts/reporter.mjs   progress and the closing report, plain or Clack
   src/render/*.mjs           .env, Compose selection, Dockerfile, README, marker
   template/                  the application, built from this repository
   template.json              which FlowCMS version the template is
 ```
 
-Plain ESM, **no dependencies**, Node `>=22` — interactive installer included.
-Argument parsing is a table and forty lines;
-the prompts are `node:readline` and about a hundred, masked input included. A
-library for either would be a version to track and a supply chain to trust,
-bought for a select list.
+Plain ESM, **one dependency**, Node `>=22`.
+
+That dependency is [`@clack/prompts`](https://www.npmjs.com/package/@clack/prompts),
+and it is the interactive UI and nothing else. Argument parsing is still a table
+and forty lines, and it stays that way — a library for *that* would be a version
+to track bought for a select list.
+
+The prompts are a different question. They were `node:readline` and about a
+hundred lines while the answers were typed as numbers; making them navigable —
+arrow keys, a redrawn option list, answers that collapse when submitted, masked
+input drawn rather than raced against an echo — is a terminal UI toolkit, and a
+hand-rolled one is where a rendering bug lands on somebody else's terminal
+instead of in a test.
+
+The rule is now *one dependency, named*, rather than zero:
+`tests/scaffolder/deploymentCli.test.ts` fails on the second one.
 
 ## The CLI
 

@@ -227,9 +227,42 @@ check(
   existsSync(join(CLI_HOME, "node_modules", "create-flowcms", "template", "package.json")),
 )
 
+/**
+ * The two numbers this proof compares against, READ rather than written down.
+ *
+ * Both were literal `"0.1.0"` until the 0.1.1 release, when they failed for the
+ * only reason a hardcoded version ever fails: the release moved and the literal
+ * did not. That is a proof reporting a defect in itself, and it does it in the
+ * worst place — `consumer-proofs.yml`, `portability.yml` and `docker.yml` all
+ * run this script, and all three are tiers `release.yml` calls, so the tag-push
+ * release proof goes red on the release that was correct.
+ *
+ * Deriving them is also a STRONGER check than the literal was. The chain it now
+ * proves end to end is: `FLOWCMS_VERSION` → the template build's stamp → the
+ * marker the CLI writes into somebody's project; and separately, the manifest
+ * that was packed → what the installed binary reports. A literal proved only
+ * that one release's numbers had been typed in two places.
+ *
+ * NOT derived, and deliberately: the GENERATED PROJECT's own version below.
+ * That one is unrelated to the FlowCMS release by design — see the comment on
+ * `renderPackageJson` in packages/create-flowcms/src/scaffold.mjs — so it stays
+ * a literal, and it stays `0.1.0`.
+ */
+const EXPECTED_CLI_VERSION = JSON.parse(
+  readFileSync(join(ROOT, "packages", "create-flowcms", "package.json"), "utf8"),
+).version
+const EXPECTED_FLOWCMS_VERSION = readFileSync(
+  join(ROOT, "src", "Themes", "contract", "version.ts"),
+  "utf8",
+).match(/FLOWCMS_VERSION\s*=\s*"([^"]+)"/)?.[1]
+
 step("Run the installed bin")
 const version = node([installedBin, "--version"], CLI_HOME).trim()
-check("--version reports the package version", version === "0.1.0", version)
+check(
+  `--version reports the packed manifest's version (${EXPECTED_CLI_VERSION})`,
+  version === EXPECTED_CLI_VERSION,
+  version,
+)
 
 const help = node([installedBin, "--help"], CLI_HOME)
 check("--help documents the usage", help.includes("create-flowcms <project-directory>"))
@@ -356,12 +389,18 @@ console.log(`  ${projectFiles.length} files`)
 const manifest = JSON.parse(readFileSync(join(PROJECT, "package.json"), "utf8"))
 check("its package name came from the directory", manifest.name === "my-site", manifest.name)
 check("it is private", manifest.private === true)
+// A LITERAL, on purpose. The generated project's version is its own and has
+// nothing to do with which FlowCMS produced it; that relationship is recorded
+// in `.flowcms/project.json`, checked just below. If this ever tracked the
+// release, every generated project would claim a version its owner did not set.
 check("it starts at its own version", manifest.version === "0.1.0", manifest.version)
 check("the ignore file arrived as .gitignore", existsSync(join(PROJECT, ".gitignore")))
 check("the neutral name was renamed away", !existsSync(join(PROJECT, "gitignore")))
 check(
-  "it records the template it came from",
-  JSON.parse(readFileSync(join(PROJECT, ".flowcms", "project.json"), "utf8")).templateVersion === "0.1.0",
+  `it records the FlowCMS it came from (${EXPECTED_FLOWCMS_VERSION})`,
+  JSON.parse(readFileSync(join(PROJECT, ".flowcms", "project.json"), "utf8")).templateVersion ===
+    EXPECTED_FLOWCMS_VERSION,
+  JSON.parse(readFileSync(join(PROJECT, ".flowcms", "project.json"), "utf8")).templateVersion,
 )
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 {
   "name": "create-flowcms",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Create a new FlowCMS site. Scaffolds the application, its deployment configuration and its .env, then installs dependencies.",
   "license": "GPL-2.0-or-later",
   "author": "FlowCMS Tech",
@@ -14,6 +14,9 @@
     "url": "https://github.com/flowcms-tech/flowcms/issues"
   },
   "type": "module",
+  "dependencies": {
+    "@clack/prompts": "^1.7.0"
+  },
   "bin": {
     "create-flowcms": "./bin/create-flowcms.mjs"
   },

@@ -126,37 +126,56 @@ describe("what the CLI does with an interruption", () => {
 
 describe("masking, and what it can honestly claim", () => {
   /**
-   * The muting works by intercepting readline's own echo, which exists only
-   * while the interface is in terminal mode. When stdout is redirected and a
-   * terminal is still attached to stdin, the TTY driver echoes in the kernel
-   * and nothing in this process can suppress it — so the prompt says so rather
-   * than promising masking that is not happening.
+   * WHY THE WARNING THIS BLOCK USED TO TEST IS GONE.
    *
-   * Driven here with an input that claims to be a TTY and an output that does
-   * not, which is exactly `create-flowcms … | tee install.log`.
+   * The readline installer masked by intercepting its OWN echo, which exists
+   * only while the interface is in terminal mode. Redirect stdout while a
+   * terminal is still attached to stdin — `create-flowcms … | tee install.log`
+   * — and the TTY driver echoes in the kernel instead, where nothing in this
+   * process can stop it. The prompt could not detect that, so it printed a
+   * warning rather than promising masking that was not happening.
+   *
+   * Clack does not have that failure mode. It renders the mask itself: the
+   * characters are never echoed by anyone, they are drawn as bullets by the
+   * prompt. There is no terminal state in which it silently stops masking, so
+   * there is nothing left to warn about, and a warning that no longer describes
+   * anything would be worse than none.
+   *
+   * What survives is the property the warning existed to protect, asserted
+   * directly against the same redirected-output shape.
    */
-  it("warns when the terminal is in a mode where input cannot be hidden", async () => {
-    const input = new PassThrough() as PassThrough & { isTTY?: boolean }
+  it("keeps a typed database URL out of the output stream", async () => {
+    const input = new PassThrough() as PassThrough & {
+      isTTY?: boolean
+      setRawMode?: (mode: boolean) => void
+    }
     const output = new PassThrough()
+    // A terminal on stdin, a pipe on stdout — the exact case the old warning
+    // was about. Claiming `isTTY` obliges the fake to carry `setRawMode` too:
+    // Clack switches a real terminal into raw mode to read single keys, and a
+    // stream that says it is a terminal without offering that is a shape no
+    // actual stdin has.
     input.isTTY = true
+    input.setRawMode = () => {}
 
     let transcript = ""
-    let pending: NodeJS.Timeout | null = null
-    const answers = ["2", "postgresql://user:pw@db.example.com:5432/flowcms"]
+    const keys = ["postgresql://user:pw@db.example.com:5432/flowcms\r"]
 
     output.on("data", (chunk) => {
       transcript += String(chunk)
-      if (pending) clearTimeout(pending)
-      pending = setTimeout(() => {
-        if (answers.length === 0) return
-        input.write(answers.shift() + "\n")
-      }, 10)
     })
+
+    const feeder = setInterval(() => {
+      if (keys.length === 0) return
+      if (input.readableLength > 0) return
+      input.write(keys.shift()!)
+    }, 20)
 
     const session = await collectInteractively(
       {
         deploymentMode: "local",
         packageManager: "npm",
+        database: "postgresql",
         storage: "garage",
         redis: "none",
         adminPath: "/admin",
@@ -164,10 +183,11 @@ describe("masking, and what it can honestly claim", () => {
       { input, output },
     )
     session.close()
+    clearInterval(feeder)
 
-    // The database question is the masked one for a local deployment.
-    expect(transcript).toMatch(/input can be hidden|cannot be hidden/i)
-    // And the warning is never the credential itself.
     expect(transcript).not.toContain("postgresql://user:pw@db.example.com")
+    expect(transcript).not.toContain("pw@db")
+    // The field is still named, so the operator knows what is being asked for.
+    expect(transcript).toContain("Connection URL")
   })
 })

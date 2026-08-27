@@ -168,6 +168,89 @@ describe("validation refuses what cannot work", () => {
   })
 })
 
+/**
+ * THE URL THAT NEVER ARRIVED.
+ *
+ * A local deployment of a server database has no Compose service for the
+ * installer to create, so the connection URL is the operator's to supply.
+ * `missingSecrets()` refuses a non-interactive run without one — but the
+ * INTERACTIVE path could reach validation with an empty string, because a
+ * masked prompt returns `""` for a bare enter and `""` is falsy in every check
+ * that asked `if (config.externalDatabaseUrl)`.
+ *
+ * What that produced, verified against the published 0.1.0 before this rule
+ * existed: validation passed, `buildDatabaseEnv` took the MANAGED branch —
+ * whose password is null outside Docker — and wrote
+ *
+ *     DATABASE_URL=postgresql://flowcms:null@localhost:5432/flowcms
+ *
+ * into somebody's `.env`, silently. A refused configuration costs a retype.
+ * That URL costs an evening.
+ */
+describe("a local deployment whose external database URL never arrived", () => {
+  /** Local mode defaults to external S3, which needs credentials of its own. */
+  const localExternal = (overrides: Record<string, unknown> = {}) =>
+    baseConfig({
+      deploymentMode: "local",
+      storage: "s3",
+      externalStorage: {
+        endpoint: "https://s3.example.test",
+        region: "eu-west-2",
+        bucket: "my-bucket",
+        accessKeyId: "AKIAEXAMPLE",
+        secretAccessKey: "a-secret",
+      },
+      ...overrides,
+    })
+
+  it.each(["postgresql", "mysql", "mariadb"])(
+    "refuses local + %s with an empty URL",
+    (database) => {
+      expect(() =>
+        validateConfig(localExternal({ database, externalDatabaseUrl: "" })),
+      ).toThrow(/database URL/i)
+    },
+  )
+
+  it("refuses local + postgresql with no URL at all", () => {
+    expect(() =>
+      validateConfig(localExternal({ database: "postgresql", externalDatabaseUrl: null })),
+    ).toThrow(ConfigError)
+  })
+
+  it("never lets a null password reach a generated DATABASE_URL", () => {
+    // The assertion is on the OUTCOME rather than the message: whatever the
+    // wording becomes, a configuration that would render this string must not
+    // be one `validateConfig` returns.
+    const config = localExternal({ database: "postgresql", externalDatabaseUrl: "" })
+    expect(buildDatabaseEnv(config).DATABASE_URL).toContain(":null@")
+    expect(() => validateConfig(config)).toThrow(ConfigError)
+  })
+
+  it("still accepts a real URL", () => {
+    expect(() =>
+      validateConfig(
+        localExternal({
+          database: "postgresql",
+          externalDatabaseUrl: "postgresql://u:p@db.example.test:5432/flowcms",
+        }),
+      ),
+    ).not.toThrow()
+  })
+
+  it("does not require a URL for SQLite, which has no server", () => {
+    expect(() =>
+      validateConfig(localExternal({ database: "sqlite", externalDatabaseUrl: null })),
+    ).not.toThrow()
+  })
+
+  it("does not require a URL in Docker, where the installer creates the server", () => {
+    expect(() =>
+      validateConfig(baseConfig({ database: "postgresql", externalDatabaseUrl: null })),
+    ).not.toThrow()
+  })
+})
+
 describe("secrets", () => {
   it("generates four independent values", () => {
     // One value reused would be a single key unlocking sessions, the CAPTCHA,

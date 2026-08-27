@@ -19,6 +19,7 @@ import { resolveConfig } from "./config/resolve.mjs"
 import { ConfigError, buildSafeSummary, formatSummary } from "./config/validate.mjs"
 import { PromptInterrupted, confirmAndClose } from "./prompts/interactive.mjs"
 import { applyConfiguration } from "./render/project.mjs"
+import { createReporter } from "./prompts/reporter.mjs"
 import { composeUpCommand } from "./render/compose.mjs"
 import { detectManagerVersion } from "./packageManager.mjs"
 
@@ -153,6 +154,16 @@ export async function run(argv, io = console, deps = {}) {
     yarnMajor: observed.major ?? 1,
   }
 
+  // Interactive iff a PROMPT SESSION was opened. `resolveConfig` already made
+  // that decision against the real TTY check; asking again here would be a
+  // second answer that could disagree with the first, and the failure mode of
+  // disagreeing is a spinner redrawing into somebody's build log.
+  const reporter = createReporter({
+    interactive: Boolean(session),
+    io,
+    output: deps.output ?? process.stdout,
+  })
+
   if (!options.skipInstall && !(await available(resolved.packageManager))) {
     if (session) session.close()
     throw new UsageError(
@@ -163,20 +174,17 @@ export async function run(argv, io = console, deps = {}) {
 
   // The summary is built from a WHITELIST of non-sensitive fields, so it
   // cannot show a secret even if one were added to the configuration later.
-  io.log("")
-  io.log(formatSummary(buildSafeSummary(resolved)))
+  reporter.summary(formatSummary(buildSafeSummary(resolved)))
 
   if (session) {
     const proceed = await confirmAndClose(session, "Create the project with this configuration?")
     if (!proceed) {
-      io.log("")
-      io.log("Nothing was written.")
+      reporter.success(["Nothing was written."])
       return 0
     }
   }
 
-  io.log("")
-  io.log(`Creating a FlowCMS site in ${destination.path}`)
+  reporter.heading(`Creating a FlowCMS site in ${destination.path}`)
 
   let created = false
   try {
@@ -185,18 +193,22 @@ export async function run(argv, io = console, deps = {}) {
       created = true
     }
 
-    io.log("  Copying the application template")
+    reporter.step("Copying the application template")
     copyTemplate(templateDir, destination.path)
 
     const manifestPath = join(destination.path, "package.json")
     writeJson(manifestPath, renderPackageJson(manifestPath, projectName))
+    reporter.stepDone("Copied the application template")
 
-    io.log("  Writing deployment configuration")
+    reporter.step("Writing deployment configuration")
     applyConfiguration(destination.path, resolved, {
       templateVersion: stamp.templateVersion,
       cliVersion: readPackageVersion(),
     })
+    reporter.stepDone("Wrote deployment configuration")
   } catch (error) {
+    // A spinner still drawing would overwrite the error message that follows.
+    reporter.releaseTerminal()
     // Only what this process made. A directory the operator created and
     // handed to us is emptied, never removed.
     cleanUpOwnedPath({ path: destination.path, existed: !created })
@@ -208,26 +220,32 @@ export async function run(argv, io = console, deps = {}) {
   // retry. Deleting it because a registry was briefly unreachable would throw
   // away the secrets it was configured with as well as the work.
   if (options.skipInstall) {
-    io.log("  Skipping dependency installation (--skip-install)")
-    report(io, destination.path, resolved, { installed: false })
+    // The wording is load-bearing: `orchestration.test.ts` matches on it.
+    reporter.step("Skipping dependency installation (--skip-install)")
+    reporter.stepDone("Skipped dependency installation (--skip-install)")
+    report(io, reporter, destination.path, resolved, { installed: false })
     return 0
   }
 
-  io.log(`  Installing dependencies with ${resolved.packageManager}`)
+  reporter.step(`Installing dependencies with ${resolved.packageManager}`)
+  // The package manager inherits the terminal, so nothing of ours may be
+  // drawing while it runs.
+  reporter.releaseTerminal()
   const result = await install(resolved.packageManager, destination.path, io)
+  reporter.resumeTerminal()
 
   if (result.code !== 0) {
-    io.error("")
-    io.error(`Dependency installation failed (${describeInstallCommand(resolved.packageManager)}).`)
-    io.error(`The project was created at ${destination.path} and has been kept.`)
-    io.error("Its configuration and generated secrets are intact — finish it with:")
-    io.error(
+    reporter.failure([
+      "",
+      `Dependency installation failed (${describeInstallCommand(resolved.packageManager)}).`,
+      `The project was created at ${destination.path} and has been kept.`,
+      "Its configuration and generated secrets are intact — finish it with:",
       `  cd ${relative(process.cwd(), destination.path) || "."} && ${describeInstallCommand(resolved.packageManager)}`,
-    )
+    ])
     return 1
   }
 
-  report(io, destination.path, resolved, { installed: true })
+  report(io, reporter, destination.path, resolved, { installed: true })
   return 0
 }
 
@@ -258,7 +276,7 @@ function verboseRun(io) {
  * to find it — a terminal scrolls into a screenshot, a screen share and a
  * support ticket, and a token pasted into one of those has to be rotated.
  */
-function report(io, path, config, { installed }) {
+function report(io, reporter, path, config, { installed }) {
   const where = relative(process.cwd(), path) || "."
   const pm = config.packageManager
   // `<pm> run <script>` for every manager, including `start`. The bare forms —
@@ -268,39 +286,48 @@ function report(io, path, config, { installed }) {
   // the thing the operator stops trusting.
   const runScript = (script) => (pm === "npm" ? `npm run ${script}` : `${pm} run ${script}`)
 
-  io.log("")
-  io.log(`Created ${config.projectName} in ${path}`)
-  io.log("")
-  io.log("Next steps:")
-  io.log(`  cd ${where}`)
+  // COLLECTED, then handed over once. The DECISIONS below are unchanged; only
+  // the sink is. A reporter needs the whole closing report at once because the
+  // interactive one frames it and ends with an outro, and a line-at-a-time
+  // interface cannot tell which line is the last.
+  const lines = []
 
-  if (!installed) io.log(`  ${pm} install`)
+  lines.push("")
+  lines.push(`Created ${config.projectName} in ${path}`)
+  lines.push("")
+  lines.push("Next steps:")
+  lines.push(`  cd ${where}`)
+
+  if (!installed) lines.push(`  ${pm} install`)
 
   if (config.deploymentMode === "docker") {
     if (!installed) {
       // The one combination that is not obvious: no install means no
       // lockfile, and the image build installs exactly what the lockfile
       // pins. Said here rather than discovered as a build error.
-      io.log("      ^ required before the image build — it creates the lockfile")
+      lines.push("      ^ required before the image build — it creates the lockfile")
     }
-    io.log(`  ${composeUpCommand()}`)
-    io.log("")
-    io.log("  Your .env already names the Compose files and profiles this topology")
-    io.log("  uses, so no -f flags are needed. Migrations run at container start.")
+    lines.push(`  ${composeUpCommand()}`)
+    lines.push("")
+    lines.push("  Your .env already names the Compose files and profiles this topology")
+    lines.push("  uses, so no -f flags are needed. Migrations run at container start.")
   } else {
-    io.log(`  ${runScript("build:packages")}`)
-    io.log(`  ${runScript("db:migrate")}`)
-    io.log(`  ${runScript("build")} && ${pm === "npm" ? "npm start" : runScript("start")}`)
+    lines.push(`  ${runScript("build:packages")}`)
+    lines.push(`  ${runScript("db:migrate")}`)
+    lines.push(`  ${runScript("build")} && ${pm === "npm" ? "npm start" : runScript("start")}`)
   }
 
-  io.log("")
-  io.log("Then create the first owner:")
-  io.log(`  1. Open ${config.baseUrl}/setup`)
-  io.log("  2. It asks for a setup token — yours is FLOWCMS_SETUP_TOKEN in .env")
-  io.log("  3. Create the owner account and the site identity")
-  io.log(`  4. Sign in at ${config.baseUrl}${config.adminPath}/login`)
-  io.log("")
-  io.log(".env holds this project's real secrets. It is gitignored; keep it that way.")
+  lines.push("")
+  lines.push("Then create the first owner:")
+  lines.push(`  1. Open ${config.baseUrl}/setup`)
+  lines.push("  2. It asks for a setup token — yours is FLOWCMS_SETUP_TOKEN in .env")
+  lines.push("  3. Create the owner account and the site identity")
+  lines.push(`  4. Sign in at ${config.baseUrl}${config.adminPath}/login`)
+  lines.push("")
+  lines.push(".env holds this project's real secrets. It is gitignored; keep it that way.")
+
+  void io
+  reporter.success(lines)
 }
 
 /**
