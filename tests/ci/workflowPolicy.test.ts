@@ -8,17 +8,19 @@ import { join } from "node:path"
  * Workflow files are the one part of this repository that cannot be exercised
  * by running it. They execute on GitHub, on a push, in an environment nobody
  * has locally — so the properties that matter most about them (least
- * privilege, no publishing, no secret in the YAML) are exactly the properties
- * nothing otherwise checks.
+ * privilege, no ACCIDENTAL publishing, no credential in the YAML) are exactly
+ * the properties nothing otherwise checks.
  *
  * This suite reads them as TEXT rather than parsed YAML, deliberately. Parsing
  * would need a YAML library this repository does not depend on, and the
  * assertions worth making here are about what a reviewer would see in a diff:
  * a literal `contents: write`, a literal `@main`, a literal token.
  *
- * It cannot verify that a workflow RUNS. No workflow in this repository has
- * ever run. It verifies the policy the workflows are supposed to encode, which
- * is the part that stays true regardless of whether one has executed yet.
+ * It cannot verify that a workflow RUNS, and a green run would not make these
+ * assertions redundant: the pipeline has run, and `0.1.0` has been published
+ * through it, but a run only proves the path taken that day. What is pinned
+ * here is the policy the workflows encode — the parts that must stay true of
+ * every future run, including the ones nobody is watching.
  */
 
 const ROOT = process.cwd()
@@ -71,7 +73,7 @@ describe("the workflows exist", () => {
     ["database-matrix.yml", "the four-engine database gates"],
     ["consumer-proofs.yml", "the clean-consumer proofs"],
     ["portability.yml", "the Windows/macOS suites and the package-manager matrix"],
-    [RELEASE, "the release proof and the blocked publish job"],
+    [RELEASE, "the release proof and the gated publish job"],
   ])("ships %s — %s", (file) => {
     expect(FILES).toContain(file)
   })
@@ -196,13 +198,75 @@ describe("supply chain", () => {
   const packedFixtureInstall = () =>
     /npm install --no-save --no-package-lock --no-audit --no-fund "\$RUNNER_TEMP\/\$tarball"/g
 
+  /**
+   * THE SECOND EXCEPTION: the npm CLI itself.
+   *
+   * npm Trusted Publishing is performed by the npm CLI, not by the workflow —
+   * it is the client that exchanges the runner's OIDC identity for a
+   * short-lived publish credential — and it needs a version newer than the one
+   * bundled with the project's Node line. So the release workflow installs a
+   * CLI globally.
+   *
+   * That is categorically different from the policy this sits inside. This
+   * installs the PACKAGE MANAGER, globally, touching no lockfile and no
+   * manifest; the reproducibility rule is about project dependencies, which are
+   * still `npm ci`. The pattern below is what keeps the difference from
+   * eroding: `-g`, the literal package `npm`, and an exact pinned version. A
+   * range, a dist-tag, or any other package name is not matched here and is
+   * therefore still rejected as a bare `npm install`.
+   */
+  const globalNpmCliInstall = () => /npm install -g npm@(\d+)\.(\d+)\.(\d+)\b/g
+
   it.each(FILES)("%s installs with `npm ci`, never `npm install`", (file) => {
-    const source = withoutComments(read(file)).replace(packedFixtureInstall(), "«packed-fixture»")
+    const source = withoutComments(read(file))
+      .replace(packedFixtureInstall(), "«packed-fixture»")
+      .replace(globalNpmCliInstall(), "«pinned-npm-cli»")
     expect(
       source,
       `${file} uses npm install; the lockfile would be rewritten silently instead of enforced`,
     ).not.toMatch(/\bnpm\s+install\b/)
     if (/\bnpm\b/.test(source)) expect(source).toMatch(/npm ci\b/)
+  })
+
+  it("the npm CLI exception is one pinned upgrade, in the release workflow only", () => {
+    /**
+     * Narrow by construction, in four independent ways. Widening any of them
+     * fails here rather than passing quietly:
+     *
+     *   - it appears in exactly one workflow, and that workflow is the release
+     *   - it appears exactly once in that workflow
+     *   - the package is literally `npm` and nothing else
+     *   - the version is an exact semver, so `@latest`, `^11`, `11.x` and every
+     *     other floating specifier fall outside the exception and are rejected
+     *     by the `npm ci` rule above
+     *
+     * The floor is the property that actually matters: below npm 11.5.1 the CLI
+     * cannot do the OIDC exchange at all, so a downgrade past it would silently
+     * turn the publish back into something that needs a token.
+     */
+    const users = FILES.filter((f) => globalNpmCliInstall().test(withoutComments(read(f))))
+    expect(users, "the pinned npm CLI upgrade appears outside the release workflow").toEqual([
+      RELEASE,
+    ])
+
+    const matches = [...withoutComments(read(RELEASE)).matchAll(globalNpmCliInstall())]
+    expect(matches.length, "release.yml installs the npm CLI more than once").toBe(1)
+
+    const [, major, minor, patch] = matches[0].map(Number)
+    const atLeast = (a: number, b: number, c: number) =>
+      major > a || (major === a && (minor > b || (minor === b && patch >= c)))
+    expect(
+      atLeast(11, 5, 1),
+      `release.yml pins npm@${major}.${minor}.${patch}, which is below the 11.5.1 that Trusted Publishing requires`,
+    ).toBe(true)
+
+    // And the workflow must check it got what it asked for: a global install
+    // that silently resolved elsewhere would run the exchange on an unknown
+    // client.
+    expect(
+      withoutComments(read(RELEASE)),
+      "release.yml never verifies the npm version it just pinned",
+    ).toMatch(/npm --version/)
   })
 
   it("the packed-fixture exception lives in exactly one workflow and keeps its guards", () => {
@@ -278,15 +342,34 @@ describe("no secret dependence", () => {
     }
   })
 
-  it("generates its ephemeral secrets rather than reading repository secrets", () => {
+  it("reads no repository secret, anywhere, including for publishing", () => {
+    /**
+     * This assertion used to carve out one exception: `secrets.NPM_TOKEN` in
+     * the publish job, for the first publication. That exception is gone, and
+     * it is gone for a reason worth stating.
+     *
+     * npm Trusted Publishing authenticates the release by exchanging the
+     * runner's GitHub OIDC identity for a short-lived, single-use credential.
+     * No tracked workflow holds anything long-lived to leak or to rotate, and
+     * the credential that is minted cannot be used from another repository or
+     * another workflow. Re-introducing a publish token would not merely add a
+     * secret — it would reopen the class of failure that Trusted Publishing
+     * exists to close, while leaving every other gate in this file untouched.
+     *
+     * So the policy is now absolute: no workflow reads any repository secret.
+     * The test suite's own credentials are generated in-job and die with the
+     * runner; see the assertion below.
+     */
     for (const file of FILES) {
       const source = withoutComments(read(file))
-      for (const ref of source.match(/secrets\.[A-Z_]+/g) ?? []) {
-        // The single permitted reference is a name that does not exist yet, in
-        // the blocked publish job.
-        expect(ref, `${file} reads ${ref}`).toBe("secrets.NPM_TOKEN")
-        expect(file, `${ref} is referenced outside the release workflow`).toBe(RELEASE)
-      }
+      // Scoped to expression context on purpose. A repository secret can only
+      // be read through `${{ }}`; matching the bare word would also flag
+      // `scripts/ci/generate-test-secrets.mjs`, which is the very script that
+      // makes reading one unnecessary.
+      const refs = (source.match(/\$\{\{[\s\S]*?\}\}/g) ?? []).flatMap(
+        (expression) => expression.match(/\bsecrets\.[A-Za-z_][A-Za-z0-9_]*/g) ?? [],
+      )
+      expect(refs, `${file} reads a repository secret: ${refs.join(", ")}`).toEqual([])
     }
   })
 
@@ -410,7 +493,8 @@ describe("release safety", () => {
    * Bounding matters: several assertions below are about what a step does NOT
    * contain, and a search across the whole file would find the thing in some
    * other step and pass for the wrong reason. `registry.npmjs.org`, for one,
-   * appears both in the setup-node registry-url and in the availability gate.
+   * appears both in the setup-node registry-url and in the release-target
+   * preflight.
    */
   function publishSteps(text: string): { name: string; body: string; at: number }[] {
     const jobAt = text.indexOf("\n  publish:")
@@ -427,8 +511,8 @@ describe("release safety", () => {
     })
   }
 
-  // Publication is no longer blocked outright — the bootstrap release path is
-  // live. What these assert is that it stays DELIBERATE: four independent
+  // Publishing is a live capability, not a blocked one: 0.1.0 went out through
+  // this file. What these assert is that it stays DELIBERATE — four independent
   // things must line up before anything reaches the registry, and none of them
   // is something an ordinary push or a merge can supply.
 
@@ -488,18 +572,112 @@ describe("release safety", () => {
     expect(first, "create-flowcms is published before flowcms").toBeLessThan(second)
   })
 
-  it("keeps the npm token out of everything except the publish commands", () => {
-    const text = withoutComments(raw())
-    const uses = [...text.matchAll(/NODE_AUTH_TOKEN/g)]
-    // Exactly the two publish steps. A workflow-level or job-level env block
-    // would hand the token to every step, including third-party actions.
-    expect(uses.length, "NODE_AUTH_TOKEN appears somewhere other than the two publish steps").toBe(
-      2,
+  it("carries no npm publish credential at all", () => {
+    /**
+     * The predecessor of this assertion permitted exactly two occurrences of
+     * NODE_AUTH_TOKEN, one per publish step, and checked they were not echoed.
+     * That was the right shape for a token-authenticated publish. There is no
+     * token now: the npm CLI exchanges the job's OIDC identity for a
+     * short-lived credential it never writes down.
+     *
+     * Counting to zero is a much stronger property than counting to two, so
+     * this asserts absence rather than scope. There is nothing here to leak,
+     * which means there is nothing here to review the handling of.
+     */
+    const raw_ = raw() // comments included: not even the prose may name one
+    expect(raw_, "release.yml references an npm publish token").not.toMatch(/NPM_TOKEN/)
+    expect(raw_, "release.yml sets an npm auth token for publishing").not.toMatch(
+      /NODE_AUTH_TOKEN/,
     )
-    expect(text, "the token is echoed or summarised").not.toMatch(
-      /echo[^\n]*(NODE_AUTH_TOKEN|NPM_TOKEN)/,
-    )
+
+    const text = withoutComments(raw_)
+    // The remaining ways a credential leaks into a log.
     expect(text, "npm auth configuration is dumped to the log").not.toMatch(/npm config list/)
+    expect(text, "an .npmrc is written by hand").not.toMatch(/_authToken/)
+
+    // The publish steps carry FLOWCMS_RELEASE and nothing else. An env block
+    // that grew a second entry would be the first sign of a token returning.
+    for (const step of publishSteps(text).filter((s) => /run: npm publish\b/.test(s.body))) {
+      const env = [...step.body.matchAll(/^ {10}([A-Z_][A-Z0-9_]*):/gm)].map((m) => m[1])
+      expect(env, `${step.name} passes more than FLOWCMS_RELEASE`).toEqual(["FLOWCMS_RELEASE"])
+    }
+  })
+
+  it("authenticates publication through OIDC rather than a stored credential", () => {
+    const text = withoutComments(raw())
+    const steps = publishSteps(text)
+
+    // The CLI that performs the exchange, pinned. Its narrowness is asserted in
+    // the least-privilege suite; what matters here is that it runs BEFORE the
+    // publish steps, since the bundled npm cannot do the exchange at all.
+    const pin = steps.find((step) => /npm install -g npm@/.test(step.body))
+    expect(pin, "release.yml never installs an npm CLI that can do the OIDC exchange").toBeDefined()
+    const firstPublish = text.search(/run: npm publish\b/)
+    expect(firstPublish, "release.yml has no publish step").toBeGreaterThan(-1)
+    expect(pin?.at, "the npm CLI is pinned after publication has begun").toBeLessThan(firstPublish)
+
+    /**
+     * THE REGISTRY IS CHOSEN WITHOUT CHOOSING AN AUTH METHOD.
+     *
+     * This used to assert setup-node's `registry-url`, which was asserting an
+     * implementation that actively breaks the thing it sat next to.
+     * `registry-url` does not only select a registry: setup-node writes an
+     * npmrc carrying an auth entry for it, keyed to an environment variable
+     * Trusted Publishing never sets, and points npm at that file. npm then sees
+     * a registry already configured for classic token auth and does not begin
+     * the OIDC exchange — ENEEDAUTH or E404, from a workflow that looks
+     * correct.
+     *
+     * So the property is inverted. The publish job's setup-node must configure
+     * NO registry auth, and the registry must be selected on its own.
+     */
+    const setup = steps.find((step) => /uses:\s*actions\/setup-node/.test(step.body))
+    expect(setup, "the publish job never sets up Node").toBeDefined()
+    expect(
+      setup?.body,
+      "the publish job's setup-node configures registry auth, which shadows the OIDC exchange",
+    ).not.toMatch(/registry-url/)
+    expect(
+      text,
+      "release.yml still uses setup-node's registry-url; it writes an auth entry npm will prefer over OIDC",
+    ).not.toMatch(/registry-url/)
+
+    // The privileged job takes no restored cache: it is the one that signs and
+    // publishes, and a cache is input carried over from an earlier run.
+    expect(
+      setup?.body,
+      "the publish job's setup-node leaves package-manager caching on",
+    ).toMatch(/package-manager-cache:\s*false/)
+
+    // The registry is still pinned, by the one key that only selects a
+    // registry, and the job verifies it took effect rather than assuming it.
+    const registry = steps.find((step) => /npm config set registry/.test(step.body))
+    expect(registry, "the publish job never pins the registry it publishes to").toBeDefined()
+    expect(registry?.body, "the registry is pinned to something other than the public npm").toMatch(
+      /npm config set registry https:\/\/registry\.npmjs\.org\/?\b/,
+    )
+    expect(
+      registry?.body,
+      "the pinned registry is set but never verified to have taken effect",
+    ).toMatch(/npm config get registry/)
+    expect(registry?.at, "the registry is pinned after publication has begun").toBeLessThan(
+      firstPublish,
+    )
+
+    // No classic login path may exist alongside the exchange.
+    expect(text, "release.yml logs in to npm with a stored credential").not.toMatch(
+      /npm\s+(login|adduser|add-user)\b/,
+    )
+
+    // Trusted publishing is bound by npm to this workflow FILENAME and this
+    // environment. Neither is decoration: change either and the registry
+    // refuses the publish, so both are pinned as release policy.
+    expect(FILES, "the release workflow was renamed; npm's trust binding names it").toContain(
+      "release.yml",
+    )
+    expect(text, "the publish job left the npm-publish environment").toMatch(
+      /environment: npm-publish/,
+    )
   })
 
   it("scopes id-token: write to the publish job alone", () => {
@@ -528,80 +706,141 @@ describe("release safety", () => {
     expect(text).toMatch(/flowcms-theme-aurora/)
   })
 
-  it("gates publication on a fail-closed registry check of both package names", () => {
+  /**
+   * The release-target preflight, located structurally: the step that queries
+   * the registry ABOUT THE PACKAGES. Naming the registry is not enough to
+   * identify it — setting up Node and pinning the registry both mention the
+   * same host — so the manifest it reads is what distinguishes it.
+   */
+  const preflightStep = (text: string) =>
+    publishSteps(text).find(
+      (step) =>
+        /registry\.npmjs\.org/.test(step.body) &&
+        /packages\/flowcms/.test(step.body) &&
+        !/uses:\s*actions\/setup-node/.test(step.body),
+    )
+
+  it("refuses to publish on any registry answer it cannot interpret", () => {
     /**
-     * THE DEFECT THIS PINS.
+     * THE DEFECT THIS PINS, and it outlived the gate it was written for.
      *
-     * The obvious way to ask whether a name is free —
+     * The obvious way to ask the registry anything —
      *
-     *     if npm view "$name" >/dev/null 2>&1; then taken; else available; fi
+     *     if npm view "$name" >/dev/null 2>&1; then ...; else ...; fi
      *
-     * — reads EVERY failure as proof the name is free. A 404, yes. But equally
-     * a DNS failure, a TLS failure, a proxy in front of the runner, a registry
-     * outage, a 429, or an npm client that fell over. Those are precisely the
-     * conditions under which nobody should be publishing, and that shape waves
-     * all of them through while printing a reassuring "available".
+     * — collapses every distinct failure into one branch. A 404, yes. But
+     * equally a DNS failure, a TLS failure, a proxy in front of the runner, a
+     * registry outage, a 429, or an npm client that fell over. Those are
+     * precisely the conditions under which nobody should be publishing.
      *
-     * So the property worth pinning is not which command is used. It is that
-     * only an authoritative 404 is read as available, and that everything else
-     * — including the registry being unreachable — refuses.
+     * The property pinned here is not which command is used, and not which
+     * answer means "go". It is that exactly one specific answer is interpreted
+     * at all, and everything else refuses.
      */
     const text = withoutComments(raw())
-    const steps = publishSteps(text)
-    expect(steps.length, "release.yml has no publish job with named steps").toBeGreaterThan(0)
+    expect(publishSteps(text).length, "release.yml has no publish job with named steps")
+      .toBeGreaterThan(0)
 
-    // The gate is the step that talks to the registry itself, not the one that
-    // merely points npm at it.
-    const gate = steps.find(
-      (step) =>
-        /registry\.npmjs\.org/.test(step.body) && !/uses:\s*actions\/setup-node/.test(step.body),
-    )
+    const gate = preflightStep(text)
     expect(gate, "the publish job has no step that queries the npm registry").toBeDefined()
     if (!gate) return
 
-    // Exactly the two names this repository may publish.
-    expect(gate.body, "the availability gate does not check flowcms").toMatch(/['"]flowcms['"]/)
-    expect(gate.body, "the availability gate does not check create-flowcms").toMatch(
+    // Exactly the two names this repository publishes.
+    expect(gate.body, "the preflight does not check flowcms").toMatch(/['"]flowcms['"]/)
+    expect(gate.body, "the preflight does not check create-flowcms").toMatch(
       /['"]create-flowcms['"]/,
     )
 
-    // A positive control. Without one, a captive proxy answering 404 to
-    // everything reads as two free names and the publication proceeds.
-    expect(gate.body, "the availability gate has no positive control").toMatch(/['"]react['"]/)
+    // A positive control. Without one, a captive proxy answering the same thing
+    // to every request is indistinguishable from the registry agreeing with us.
+    expect(gate.body, "the preflight has no positive control").toMatch(/['"]react['"]/)
 
-    // 404 is the only answer that means available; 200 means the name is taken.
-    expect(gate.body, "the availability gate does not distinguish a 404").toMatch(/===\s*404/)
-    expect(gate.body, "the availability gate does not distinguish a 200").toMatch(/===\s*200/)
+    // Both statuses are handled as distinct, named cases.
+    expect(gate.body, "the preflight does not distinguish a 404").toMatch(/===\s*404/)
+    expect(gate.body, "the preflight does not distinguish a 200").toMatch(/[!=]==\s*200/)
 
-    // A thrown request must refuse rather than fall through to available.
-    expect(gate.body, "the availability gate does not catch a failed request").toMatch(
-      /catch\s*\(/,
-    )
+    // A thrown request must refuse rather than fall through.
+    expect(gate.body, "the preflight does not catch a failed request").toMatch(/catch\s*\(/)
 
-    // The three shapes that quietly turn a gate back into a rubber stamp.
-    expect(gate.body, "the availability gate re-introduces the fail-open npm view idiom").not.toMatch(
+    // The shapes that quietly turn a gate back into a rubber stamp.
+    expect(gate.body, "the preflight re-introduces the fail-open npm view idiom").not.toMatch(
       /npm view/,
     )
-    expect(gate.body, "the availability gate swallows its own failure").not.toMatch(/\|\|\s*true/)
-    expect(gate.body, "the availability gate cannot fail the job").not.toMatch(
-      /continue-on-error/,
-    )
+    expect(gate.body, "the preflight swallows its own failure").not.toMatch(/\|\|\s*true/)
+    expect(gate.body, "the preflight cannot fail the job").not.toMatch(/continue-on-error/)
 
-    // Public reads. Nothing here needs to prove who it is, and a token in this
-    // step's environment would be a token handed to a step that never spends it.
-    expect(gate.body, "the availability gate is handed an npm token").not.toMatch(
-      /NODE_AUTH_TOKEN|NPM_TOKEN/,
+    // Public reads. A credential here would be one handed to a step that has
+    // nothing to spend it on.
+    expect(gate.body, "the preflight is handed a credential").not.toMatch(
+      /NODE_AUTH_TOKEN|NPM_TOKEN|_authToken/,
     )
-    expect(gate.body, "the availability gate declares an environment block").not.toMatch(
-      /^\s*env:/m,
-    )
+    expect(gate.body, "the preflight declares an environment block").not.toMatch(/^\s*env:/m)
 
     // And it has to run BEFORE anything is published, not beside it.
     const firstPublish = text.search(/run: npm publish\b/)
     expect(firstPublish, "release.yml has no publish step").toBeGreaterThan(-1)
-    expect(gate.at, "the availability gate runs after publication has begun").toBeLessThan(
-      firstPublish,
+    expect(gate.at, "the preflight runs after publication has begun").toBeLessThan(firstPublish)
+  })
+
+  it("checks the release target, not whether the names are still unclaimed", () => {
+    /**
+     * THE INVERSION THIS PINS.
+     *
+     * Before 0.1.0 the preflight asked "are these names still free?" and
+     * refused on HTTP 200. Both packages exist now, so that question inverted:
+     * 200 is the healthy answer and a 404 means something is wrong. A gate left
+     * in its first-publication shape would refuse every release forever, and —
+     * worse — a gate half-converted might read a 404 as an invitation.
+     *
+     * Each assertion below names an invariant rather than an implementation.
+     * The step may be rewritten freely; what may not disappear is the set of
+     * things it establishes before a version is allowed onto the registry.
+     */
+    const text = withoutComments(raw())
+    const gate = preflightStep(text)
+    expect(gate, "the publish job has no release-target preflight").toBeDefined()
+    if (!gate) return
+
+    // INVARIANT: the version published is the one in the local manifests, read
+    // from disk rather than typed into a dispatch box.
+    expect(gate.body, "the preflight never reads the local manifests").toMatch(/package\.json/)
+    for (const dir of ["packages/flowcms", "packages/create-flowcms"]) {
+      expect(gate.body, `the preflight never reads ${dir}`).toContain(dir)
+    }
+
+    // INVARIANT: the two packages are released together, at one version. They
+    // are published in sequence, so a disagreement here is how half a release
+    // reaches the registry.
+    expect(gate.body, "the preflight does not require the two versions to agree").toMatch(
+      /new Set|versions\.length/,
     )
+
+    // INVARIANT: publication runs against the tag that names that version, so
+    // what reaches the registry is what the tag resolves to. Read from the
+    // runner environment, not from an interpolated expression.
+    expect(gate.body, "the preflight does not check the ref type").toMatch(/GITHUB_REF_TYPE/)
+    expect(gate.body, "the preflight does not check the ref name").toMatch(/GITHUB_REF_NAME/)
+    expect(gate.body, "the preflight does not require the tag to be v<version>").toMatch(
+      /`v\$\{version\}`|'v' \+ version/,
+    )
+
+    // INVARIANT: an already-published version is refused. npm versions are
+    // immutable, which is also why v0.1.0 is never re-cut.
+    expect(gate.body, "the preflight does not look at the published version list").toMatch(
+      /\bversions\b/,
+    )
+    expect(
+      gate.body,
+      "the preflight does not refuse a version that already exists on the registry",
+    ).toMatch(/hasOwnProperty|\bin body\.versions\b|versions\[version\]/)
+
+    // THE BOOTSTRAP CONCEPT IS GONE. A 404 for one of our packages is now a
+    // fault, never a green light, so the vocabulary of availability must not
+    // survive in the step that decides whether to publish.
+    expect(
+      gate.body,
+      "the preflight still describes a name as free or available; that concept expired with the first publication",
+    ).not.toMatch(/\b(available|is free|unclaimed)\b/i)
   })
 
   it("leaves the GitHub Release step unreachable until it is deliberately enabled", () => {

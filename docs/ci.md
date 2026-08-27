@@ -5,10 +5,11 @@ The tiers exist because the gates cost wildly different amounts and answer
 wildly different questions, and running all of them on every pull request is how
 a pipeline becomes something people route around.
 
-> **Read this as "what is configured to run".** The push workflows have run
-> green on the public repository; the release gates have not, because nothing
-> has been released. The [First-run checklist](#first-run-checklist) lists what
-> to expect when a gate runs for the first time.
+> **This pipeline has run on the public repository**, push tiers and release
+> tiers alike, and `0.1.0` was published through it. That is not a promise about
+> any particular future run: a green run proves the path taken that day. The
+> [First-run checklist](#first-run-checklist) lists what tends to break the first
+> time a given gate runs somewhere new.
 
 ---
 
@@ -206,9 +207,10 @@ on the two slowest runner classes GitHub offers — a main-tier cost. The cheap
 
 **This job is what turns "supported" into "verified."**
 `docs/distribution/package-managers.md` records pnpm and bun as *Supported* and
-yarn as *Experimental* precisely because nothing has ever run them. A manager
-missing from the runner is reported **SKIPPED with a reason**, never passed, so a
-broken install step degrades the result honestly rather than inventing evidence.
+yarn as *Experimental*. Those levels are worth no more than this job's most
+recent summary. A manager missing from the runner is reported **SKIPPED with a
+reason**, never passed, so a broken install step degrades the result honestly
+rather than inventing evidence — read the summary before promoting a level.
 
 ### Running the main tier locally
 
@@ -277,11 +279,12 @@ maintainers.
 
 ### npm provenance
 
-The blocked `publish` job declares `id-token: write`, which is what
-`npm publish --provenance` needs. **That is a declaration, not evidence.**
+The `publish` job declares `id-token: write`, which is what
+`npm publish --provenance` needs. **A declaration is not evidence.**
 Provenance additionally requires the repository to be public, the manifest to
 carry a correct `repository` field, and the publish job to have actually run.
-The first two now hold; the third does not, because nothing has been published.
+All three now hold: the job has run, and `flowcms@0.1.0` and
+`create-flowcms@0.1.0` were both sent with `--provenance`.
 
 **The public-repository requirement is an ordering constraint on the release,
 not a detail of the flag.** A provenance publish from a private repository is
@@ -302,15 +305,15 @@ does not depend on, and adding one means regenerating `package-lock.json` — wh
 must happen in a Linux container, not on a maintainer's machine, and not from
 inside a CI phase. FlowCMS itself is `GPL-2.0-or-later`, but the transitive
 dependency scan that would confirm compatibility across the tree has not been
-run. The job belongs in the commit that lifts the publish blocks.
+run. That job is still owed.
 
 ---
 
 ## Release safety
 
-**Nothing has been published yet.** Publication is possible but deliberately
-hard to reach: it takes four independent things lining up, and no ordinary push
-or merge can supply any of them.
+**`flowcms@0.1.0` and `create-flowcms@0.1.0` are published.** Publication is a
+live capability, and deliberately hard to reach: it takes four independent
+things lining up, and no ordinary push or merge can supply any of them.
 
 1. **A manual dispatch of `release.yml`.** A `v*` tag push runs the proof tiers
    and stops there; an ordinary push to `main` does not trigger the file at all.
@@ -329,9 +332,25 @@ only the release job marks a release as being in progress. npm runs them on
 The two packages publish in order — `flowcms`, then `create-flowcms` — and the
 second does not run if the first fails.
 
-`secrets.NPM_TOKEN` is a bootstrap credential, reachable only by the two publish
-steps: never at workflow level, never at job level, never echoed, and never
-written to a summary or an artifact.
+**No tracked workflow holds an npm publish credential.** Publication
+authenticates through npm Trusted Publishing: the npm CLI in the publish job
+exchanges the runner's GitHub OIDC identity for a short-lived, single-use
+credential, which is what `id-token: write` on that job is for. npm binds that
+trust to this repository, the `release.yml` workflow filename and the
+`npm-publish` environment, so a publish attempted from another workflow or
+environment is refused by the registry rather than by policy written here.
+
+The 0.1.0 publication predates that migration and used a bootstrap token held in
+the `NPM_TOKEN` repository secret. **No workflow reads it any more**, but the
+secret and the token behind it still exist until they are deleted and revoked by
+hand — deliberately a separate step, taken after this pipeline change lands.
+
+Before either package is sent, the publish job runs a fail-closed preflight: the
+local manifests must agree on one version, the run must be on the tag that names
+that version, both packages must already exist on the registry, and neither may
+already carry that version. Every ambiguous answer — an unexpected status,
+malformed metadata, an unreachable registry — refuses. npm versions are
+immutable, so a released version is never re-published or re-tagged.
 
 Reaching `main` publishes nothing. `release.yml` has no branch trigger at all.
 
@@ -339,7 +358,9 @@ Reaching `main` publishes nothing. `release.yml` has no branch trigger at all.
 
 ## Secret policy
 
-**CI requires no production secret, and no repository secret exists.**
+**CI requires no production secret, and no workflow reads a repository secret.**
+The legacy `NPM_TOKEN` secret remains in repository settings until it is deleted
+by hand; nothing under `.github/workflows` refers to it.
 
 `scripts/ci/generate-test-secrets.mjs` generates `AUTH_SECRET`,
 `CAPTCHA_SECRET`, `PREVIEW_SECRET` and `FLOWCMS_SETUP_TOKEN` as 32 random bytes
@@ -405,14 +426,17 @@ Every workflow declares `permissions: contents: read` at the top level. No test,
 build, database or Docker job in this pipeline can write anything — not a
 comment, not a tag, not a package.
 
-The only elevated permissions in the entire pipeline live in `release.yml`'s
-blocked `publish` job, scoped to that job:
+The only elevated permission in the entire pipeline lives in `release.yml`'s
+`publish` job, scoped to that job:
 
 ```yaml
 permissions:
-  contents: write   # create the GitHub Release
-  id-token: write   # npm provenance (OIDC)
+  contents: read    # the GitHub Release step is disabled; nothing writes back
+  id-token: write   # npm Trusted Publishing (OIDC), and provenance
 ```
+
+`contents: write` is needed only if GitHub Release creation is deliberately
+enabled, and belongs in the same commit that enables it — not before.
 
 `tests/ci/workflowPolicy.test.ts` fails if a write permission appears in any
 other file, or before the `publish` job inside `release.yml`.
@@ -564,8 +588,9 @@ Both run inside `npm test`, so they are pull-request gates like everything else.
 
 ## First-run checklist
 
-Nothing here has executed. Expect to fix some of the following on the first run,
-and treat none of them as evidence the design is wrong:
+For a gate running for the first time — in a fork, on a new runner image, or
+after a dependency moves — expect to fix some of the following, and treat none
+of them as evidence the design is wrong:
 
 1. **Action major versions.** `actions/checkout@v5` and `actions/setup-node@v5`
    were written from the majors current at the time. If either tag does not
@@ -600,10 +625,10 @@ and treat none of them as evidence the design is wrong:
    kernel or image build executes. A checkout that predates it, or a test that
    compares file bytes, is the likeliest first Windows failure and says nothing
    about the design.
-8. **corepack and bun.** `corepack enable pnpm yarn` and `oven-sh/setup-bun@v2`
-   have never run here. If either fails, the manager matrix reports that manager
-   SKIPPED rather than failing the job — so read its summary, not just its exit
-   status, before recording a support level anywhere.
+8. **corepack and bun.** If `corepack enable pnpm yarn` or `oven-sh/setup-bun@v2`
+   fails, the manager matrix reports that manager SKIPPED rather than failing the
+   job — so read its summary, not just its exit status, before recording a
+   support level anywhere.
 
 ---
 

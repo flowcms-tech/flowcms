@@ -1,24 +1,33 @@
 # ---------------------------------------------------------------------------
 # Release.
 #
-# BOOTSTRAP RELEASE PATH. Nothing has been published yet. This file is what
-# performs the FIRST publication of `flowcms` and `create-flowcms`, and it is
-# deliberately hard to trigger by accident.
+# THE RELEASE PATH. `flowcms` and `create-flowcms` are published; this file is
+# how every version after 0.1.0 reaches the registry, and it is deliberately
+# hard to trigger by accident.
 #
 # CURRENT FACTS, so nobody re-derives them from a stale comment:
 #
 #   licence                GPL-2.0-or-later, in LICENSE and in both manifests
 #   repository             PUBLIC, github.com/flowcms-tech/flowcms
 #   repository metadata    repository/bugs/homepage present in both manifests
-#   npm                    NOTHING PUBLISHED YET
-#   git tag                v0.1.0 exists
-#   GitHub Release         none
-#   npm auth               bootstrap token in secrets.NPM_TOKEN, used only by
-#                          the two publish steps in the `publish` job
-#   Trusted Publishing     NOT configured — it cannot be, until the packages
-#                          exist on the registry. Configuring it, and revoking
-#                          the bootstrap token, is the step AFTER the first
-#                          publication.
+#   npm                    flowcms and create-flowcms are BOTH PUBLISHED at
+#                          0.1.0. Every npm version is immutable; this workflow
+#                          refuses to republish one that already exists.
+#   git tag                v0.1.0 exists and is IMMUTABLE. A published version's
+#                          tag is what provenance and every consumer resolve
+#                          back to. Never move, delete or recreate it.
+#   GitHub Release         none, and the step that would create one is disabled
+#   npm auth               NO PUBLISH CREDENTIAL IN THIS FILE, at any scope
+#                          within it. Publication authenticates through npm
+#                          Trusted Publishing: the npm CLI exchanges this job's
+#                          GitHub OIDC identity for a short-lived, single-use
+#                          credential. Adding a publish token back would be a
+#                          regression, not a convenience.
+#   Trusted Publishing     configured on npm for BOTH packages, and bound to
+#                          this repository, THIS workflow FILENAME, and the
+#                          `npm-publish` environment. Renaming this file, or
+#                          publishing from a different workflow or environment,
+#                          breaks that binding and the registry refuses.
 #
 # WHAT MAKES A PUBLICATION HAPPEN — all four, together:
 #
@@ -43,7 +52,14 @@
 #
 # PROVENANCE: `--provenance` needs a public repository, a GitHub-hosted runner,
 # `id-token: write`, and manifest `repository` metadata. All four hold. It
-# cannot be added to a version after that version is published.
+# cannot be added to a version after that version is published. Trusted
+# Publishing would attach provenance on its own; the flag stays explicit so the
+# intent survives a change in that default.
+#
+# WHAT THIS FILE REFUSES: publishing a version that is already on the registry,
+# publishing from anything other than the tag that names that version, and
+# publishing on any answer from the registry it cannot interpret. See the
+# release-target preflight in the publish job.
 #
 # This file contains no changelog logic and no version bumping. Creating the
 # tag and the GitHub Release remains a separate, deliberate act.
@@ -220,9 +236,11 @@ jobs:
   #
   # The `npm-publish` environment is the fourth gate, and the one that belongs
   # to a person rather than to this file: configure it with required reviewers.
+  # It is also half of the npm trust binding, so it is not merely policy here —
+  # removing it would stop the registry accepting the publish at all.
   # -------------------------------------------------------------------------
   publish:
-    name: npm publish (bootstrap)
+    name: npm publish (Trusted Publishing)
     runs-on: ubuntu-24.04
     needs: [release-proof]
     if: ${{ inputs.publish && inputs.confirm == 'PUBLISH FLOWCMS' }}
@@ -230,13 +248,17 @@ jobs:
     permissions:
       # THE ONLY ELEVATED PERMISSION IN THE ENTIRE PIPELINE, scoped to this job.
       #
-      # `contents` stays READ. The active bootstrap path publishes to npm and
-      # writes nothing back to the repository: the GitHub Release step below is
+      # `contents` stays READ. The publish path writes to npm and nothing
+      # back to the repository: the GitHub Release step below is
       # disabled, and it is the only thing here that would need write. Enabling
       # that step means adding `contents: write` back in the same commit — the
       # permission arrives with the capability that needs it, not before it.
       contents: read
-      id-token: write # npm provenance (OIDC), so the tarball is attestable
+      # OIDC. This is now load-bearing twice over: it is what npm Trusted
+      # Publishing exchanges for a publish credential, AND what provenance
+      # signs with. Without it there is no way to authenticate at all — which
+      # is the intended shape: this job holds no long-lived credential of its own.
+      id-token: write
     steps:
       # Checkout is FIRST because every gate below reads the repository. A
       # precondition that runs before checkout cannot see the manifests it
@@ -272,92 +294,250 @@ jobs:
           [ "$fail" -eq 0 ] || exit 1
           echo "release preconditions hold: public repository, repository metadata present"
 
-      - name: Set up Node with the npm registry
+      # SET UP NODE, AND NOTHING ELSE.
+      #
+      # `registry-url:` is deliberately absent, and its absence is a security
+      # property rather than a simplification. That input does not merely select
+      # a registry: setup-node writes an npmrc containing an auth entry for that
+      # registry keyed to an environment variable, and points npm at that file.
+      # With Trusted Publishing nothing ever sets that variable, so npm reads a
+      # registry it believes is already configured for classic token auth —
+      # which is precisely the state in which it does not begin the OIDC
+      # exchange, and fails with ENEEDAUTH or E404 instead. The registry is
+      # therefore selected in its own step below, by the one key that selects
+      # it and nothing more.
+      #
+      # `package-manager-cache: false` because this is the privileged job. A
+      # restored cache is attacker-influenceable input from earlier runs, and
+      # this job is the one that signs and publishes; it can afford a cold
+      # install. Every other workflow keeps its cache.
+      #
+      # The project's Node line is 22 and stays 22. `"22"` resolves to the
+      # latest 22.x, which clears both the npm CLI's engine range and Trusted
+      # Publishing's Node floor.
+      - name: Set up Node
         uses: actions/setup-node@v5
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
 
       # ---------------------------------------------------------------------
-      # The registry has the final say on the names, and it can change between
-      # one release attempt and the next. Checked here, immediately before the
-      # install/build/publish sequence, rather than trusted from an earlier
-      # check made hours or days ago.
+      # THE PUBLIC REGISTRY, CHOSEN WITHOUT A CREDENTIAL.
       #
-      # This gate FAILS CLOSED, and that is the whole point of it. The obvious
-      # way to write it — `npm view <name> || echo available` — treats EVERY
-      # failure as proof the name is free: a 404, yes, but equally a DNS
-      # failure, a TLS failure, a proxy sitting in front of the runner, a
-      # registry outage, or an npm client that fell over. Those are the exact
-      # conditions under which nobody should be publishing, and it reads them
-      # all as a green light.
+      # One config key, the one that selects a registry. No auth entry, no
+      # token variable, no `npm login`, no `npm adduser`. That is what leaves
+      # the OIDC exchange as the only way this job can authenticate at all: npm
+      # finds no configured credential for the registry, so it asks GitHub for
+      # an identity token and trades it with npm for a short-lived one.
       #
-      # So: only an authoritative HTTP 404 from the registry means available.
-      # 200 means the name is taken. Anything else — any other status, any
-      # thrown request — refuses. And a positive control against a package that
-      # is certainly there proves the registry is answering truthfully at all
-      # before either 404 is believed; without it, a captive proxy answering
-      # 404 to everything would read as two free names.
-      #
-      # Public, unauthenticated reads. NODE_AUTH_TOKEN is deliberately NOT in
-      # this step's environment: nothing here needs to prove who it is.
+      # Set AND asserted. A `set` that silently did not take effect, or a
+      # user-level config that redirects publication elsewhere, has to fail the
+      # job rather than quietly send the packages to another registry. This runs
+      # before the CLI is pinned so that even the npm download comes from the
+      # registry this workflow chose.
       # ---------------------------------------------------------------------
-      - name: The package names are still available (fail-closed)
+      - name: Target the public npm registry
+        run: |
+          set -euo pipefail
+          npm config set registry https://registry.npmjs.org/
+          effective="$(npm config get registry)"
+          if [ "$effective" != "https://registry.npmjs.org/" ]; then
+            echo "::error::npm resolves its registry to '$effective', not https://registry.npmjs.org/. Refusing to publish to a registry this workflow did not choose."
+            exit 1
+          fi
+          echo "registry: $effective"
+
+      # ---------------------------------------------------------------------
+      # THE CLIENT THAT PERFORMS THE OIDC EXCHANGE.
+      #
+      # Trusted Publishing is done by the npm CLI, not by this workflow: it
+      # needs 11.5.1 or newer, and the npm bundled with Node 22 is older. So the
+      # client is installed explicitly and PINNED TO AN EXACT VERSION. Never
+      # `npm@latest` — a release path whose credential exchange comes from
+      # whatever npm published this morning is not a release path.
+      #
+      # This is the only `npm install` in this file, and it installs the package
+      # manager rather than the project's dependencies; project dependencies are
+      # still `npm ci` below. The CI policy suite pins that narrowness: exactly
+      # this package, an exact version, at or above the Trusted Publishing
+      # floor, and only here.
+      # ---------------------------------------------------------------------
+      - name: Pin the npm CLI that performs the OIDC exchange
+        run: |
+          set -euo pipefail
+          npm install -g npm@11.19.0
+          installed="$(npm --version)"
+          if [ "$installed" != "11.19.0" ]; then
+            echo "::error::npm reports $installed after pinning 11.19.0. The publish would run its credential exchange on an unknown client, so it is refused."
+            exit 1
+          fi
+          echo "npm CLI: $installed (node $(node --version))"
+
+      # ---------------------------------------------------------------------
+      # RELEASE-TARGET PREFLIGHT.
+      #
+      # This replaced a first-publication gate that asked "are these names
+      # still free?" and refused on HTTP 200. Both packages exist now, so that
+      # question inverted: a 200 is the healthy answer, and a 404 would mean
+      # the name, the registry or this workflow is wrong.
+      #
+      # What has to be true before a version is published, permanently:
+      #
+      #   - the registry is reachable AND answering coherently
+      #   - both package names exist on it
+      #   - both local manifests carry the names this workflow publishes
+      #   - both local manifests carry the SAME version
+      #   - this run is on a tag, and that tag is exactly v<version>
+      #   - neither package already has that version
+      #
+      # It FAILS CLOSED throughout, which is the whole point. An unexpected
+      # status, malformed metadata, a thrown request, two packages disagreeing
+      # about the version — every ambiguous state refuses. The failure mode
+      # being designed against is the cheerful one: a check that reads a DNS
+      # failure, a proxy, or an outage as permission to proceed.
+      #
+      # The positive control is what makes the other answers mean anything. A
+      # captive proxy answering the same thing to everything would otherwise be
+      # indistinguishable from the registry agreeing with us.
+      #
+      # npm versions are immutable, so "already published" is not a warning to
+      # be overridden: bump the version and cut a new tag. In particular this is
+      # why v0.1.0 is never re-cut.
+      #
+      # Public, unauthenticated reads. No credential is in this step's
+      # environment, and none is needed to read public metadata.
+      # ---------------------------------------------------------------------
+      - name: Release-target preflight (fail-closed)
         run: |
           set -euo pipefail
           node - <<'NODE'
-          const REGISTRY = 'https://registry.npmjs.org';
-          const NAMES = ['flowcms', 'create-flowcms'];
-          const CONTROL = 'react';
+          const { readFileSync } = require('node:fs');
 
-          // Abbreviated metadata: the smallest response the registry will give
-          // for "does this name exist", and no credentials attached.
-          async function statusOf(name) {
+          const REGISTRY = 'https://registry.npmjs.org';
+          const CONTROL = 'react';
+          const TARGETS = [
+            { dir: 'packages/flowcms', name: 'flowcms' },
+            { dir: 'packages/create-flowcms', name: 'create-flowcms' },
+          ];
+          const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+          const trimSlash = (url) => String(url).replace(/\/+$/, '');
+
+          // Abbreviated metadata: the smallest response that still carries the
+          // package name and its full version list. No credentials attached.
+          async function packument(name) {
             const response = await fetch(`${REGISTRY}/${encodeURIComponent(name)}`, {
               method: 'GET',
               redirect: 'follow',
               headers: { accept: 'application/vnd.npm.install-v1+json' },
               signal: AbortSignal.timeout(15000),
             });
-            return response.status;
+            if (response.status !== 200) return { status: response.status, body: null };
+            try {
+              return { status: 200, body: await response.json() };
+            } catch {
+              return { status: 200, body: null };
+            }
           }
 
           (async () => {
-            // POSITIVE CONTROL. A 404 is only evidence if a 200 is reachable.
+            const die = (message) => {
+              console.log(`::error::${message}`);
+              process.exit(1);
+            };
+            let refused = false;
+            const refuse = (message) => {
+              console.log(`::error::${message}`);
+              refused = true;
+            };
+
+            // --- 1. The manifests say what this workflow thinks they say ----
+            const local = [];
+            for (const target of TARGETS) {
+              let manifest;
+              try {
+                manifest = JSON.parse(readFileSync(`${target.dir}/package.json`, 'utf8'));
+              } catch (error) {
+                die(`${target.dir}/package.json could not be read as a manifest (${error.message}). A release does not proceed on a manifest nobody can parse.`);
+              }
+              if (manifest.name !== target.name) {
+                die(`${target.dir}/package.json declares the name '${manifest.name}', but this workflow publishes '${target.name}'. Publishing would land on the wrong package.`);
+              }
+              if (typeof manifest.version !== 'string' || !SEMVER.test(manifest.version)) {
+                die(`${target.dir}/package.json carries the version ${JSON.stringify(manifest.version)}, which is not a plain semver version. Ambiguous state refuses.`);
+              }
+              // `publishConfig.registry` outranks the registry configured for
+              // the job, so it is the one remaining way a manifest could send a
+              // package somewhere this workflow did not choose. Absent is fine;
+              // present and different is not.
+              const pinned = manifest.publishConfig?.registry;
+              if (pinned !== undefined && trimSlash(pinned) !== trimSlash(REGISTRY)) {
+                die(`${target.dir}/package.json pins publishConfig.registry to ${JSON.stringify(pinned)}, which would publish somewhere other than ${REGISTRY}.`);
+              }
+              local.push({ ...target, version: manifest.version });
+            }
+
+            const versions = [...new Set(local.map((target) => target.version))];
+            if (versions.length !== 1) {
+              die(`the publishable packages disagree about the version: ${local.map((t) => `${t.name}@${t.version}`).join(', ')}. They are released together and must carry the same version.`);
+            }
+            const version = versions[0];
+            console.log(`local release version: ${version}`);
+
+            // --- 2. This run is on the tag that names that version ----------
+            const refType = process.env.GITHUB_REF_TYPE;
+            const refName = process.env.GITHUB_REF_NAME;
+            const expected = `v${version}`;
+            if (refType !== 'tag') {
+              die(`this run is on a ${refType} ('${refName}'), not a tag. Publication is dispatched against the release tag ${expected}, so that what reaches the registry is exactly what the tag names.`);
+            }
+            if (refName !== expected) {
+              die(`this run is on the tag '${refName}', but the packages are at ${version}, whose tag is '${expected}'. Refusing to publish a version its tag does not name.`);
+            }
+            console.log(`release tag: ${refName} names ${version}`);
+
+            // --- 3. The registry is reachable and coherent ------------------
             let control;
             try {
-              control = await statusOf(CONTROL);
+              control = await packument(CONTROL);
             } catch (error) {
-              console.log(`::error::the registry could not be reached at all: the positive-control request for '${CONTROL}' threw (${error.name}: ${error.message}). A 404 from an unreachable registry proves nothing, so publication is refused rather than guessed at.`);
-              process.exit(1);
+              die(`the registry could not be reached at all: the positive-control request for '${CONTROL}' threw (${error.name}: ${error.message}). Every answer below would be meaningless, so publication is refused rather than guessed at.`);
             }
-            if (control !== 200) {
-              console.log(`::error::the positive-control request for '${CONTROL}' answered HTTP ${control}, not 200. Something between this runner and the registry is not telling the truth, so the availability answers below cannot be trusted. Publication refused.`);
-              process.exit(1);
+            if (control.status !== 200 || control.body?.name !== CONTROL) {
+              die(`the positive-control request for '${CONTROL}' answered HTTP ${control.status} describing ${JSON.stringify(control.body?.name)}. Something between this runner and the registry is not answering coherently, so nothing it says about our packages can be trusted.`);
             }
-            console.log(`positive control: ${CONTROL} -> HTTP 200, the registry is answering`);
+            console.log(`positive control: ${CONTROL} -> HTTP 200, coherent metadata`);
 
-            let fail = 0;
-            for (const name of NAMES) {
-              let status;
+            // --- 4. Both packages exist, neither has this version yet -------
+            for (const target of local) {
+              let result;
               try {
-                status = await statusOf(name);
+                result = await packument(target.name);
               } catch (error) {
-                console.log(`::error::the availability request for '${name}' threw (${error.name}: ${error.message}). Refusing to read a failed request as an available name.`);
-                fail = 1;
+                refuse(`the metadata request for '${target.name}' threw (${error.name}: ${error.message}). A failed request is not evidence that publishing is safe.`);
                 continue;
               }
-              if (status === 404) {
-                console.log(`${name}: HTTP 404, the name is free`);
-              } else if (status === 200) {
-                console.log(`::error::npm already has a package called '${name}'. Publishing would fail, or land on somebody else's name - stop and decide on a scope.`);
-                fail = 1;
-              } else {
-                console.log(`::error::the registry answered HTTP ${status} for '${name}'. Only an authoritative 404 means the name is available; every other answer is refused.`);
-                fail = 1;
+              if (result.status === 404) {
+                refuse(`the registry has no package called '${target.name}'. Both packages are published, so a 404 means the name, the registry or this workflow is wrong - it is not an invitation to create it.`);
+                continue;
               }
+              if (result.status !== 200) {
+                refuse(`the registry answered HTTP ${result.status} for '${target.name}'. Only a coherent 200 counts as an answer; everything else refuses.`);
+                continue;
+              }
+              const body = result.body;
+              if (body === null || body.name !== target.name || typeof body.versions !== 'object' || body.versions === null) {
+                refuse(`the registry's metadata for '${target.name}' is malformed, or describes a different package. Refusing to reason about it.`);
+                continue;
+              }
+              if (Object.prototype.hasOwnProperty.call(body.versions, version)) {
+                refuse(`${target.name}@${version} is ALREADY PUBLISHED. npm versions are immutable: bump the version and cut a new tag rather than attempting to republish this one.`);
+                continue;
+              }
+              console.log(`${target.name}: exists, ${Object.keys(body.versions).length} published version(s), ${version} is not among them`);
             }
-            process.exit(fail);
+
+            if (refused) process.exit(1);
+            console.log(`preflight passed: publishing ${version} from ${refName}`);
           })();
           NODE
 
@@ -378,9 +558,15 @@ jobs:
       # documentation points at a package that is not there is worse than
       # neither being published.
       #
-      # NODE_AUTH_TOKEN is scoped to these two steps only. It is never set at
-      # workflow or job level, never echoed, and never written to a summary or
-      # an artifact.
+      # THERE IS NO PUBLISH TOKEN HERE, and its absence is the mechanism rather
+      # than an omission. The npm CLI exchanges this job's GitHub OIDC identity
+      # for a short-lived, single-use credential — which is what `id-token:
+      # write` above is for, and why no auth-token variable is set anywhere.
+      #
+      # npm binds that trust to this repository, this workflow FILENAME and the
+      # `npm-publish` environment. Renaming this file, or moving publication to
+      # another workflow or environment, is refused by the registry itself and
+      # not merely by policy written here.
       #
       # FLOWCMS_RELEASE=1 tells each package's publish-guard that a real release
       # is in progress. The guard still runs every one of its checks.
@@ -388,21 +574,19 @@ jobs:
       - name: Publish flowcms
         working-directory: packages/flowcms
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           FLOWCMS_RELEASE: "1"
         run: npm publish --provenance --access public
 
       - name: Publish create-flowcms
         working-directory: packages/create-flowcms
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           FLOWCMS_RELEASE: "1"
         run: npm publish --provenance --access public
 
       # ---------------------------------------------------------------------
-      # The GitHub Release is prepared but NOT enabled. Creating it is a
-      # separate deliberate act, after the packages exist and after Trusted
-      # Publishing replaces the bootstrap token. Enabling it means removing the
+      # The GitHub Release is prepared but NOT enabled. Creating it remains a
+      # separate deliberate act, in its own phase, with its own review.
+      # Enabling it means removing the
       # `if: ${{ false }}` below, in a commit, with a name on it — and, in that
       # same commit, restoring `contents: write` to this job's permissions,
       # which `gh release create` needs and which the publish path deliberately
