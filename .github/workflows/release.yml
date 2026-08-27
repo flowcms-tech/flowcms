@@ -11,7 +11,9 @@
 #   repository             PUBLIC, github.com/flowcms-tech/flowcms
 #   repository metadata    repository/bugs/homepage present in both manifests
 #   npm                    NOTHING PUBLISHED YET
-#   git tag                none
+#   git tag                v0.1.0 exists. It was cut before this file's publish
+#                          path was corrected, so it does not point at the
+#                          version of this workflow you are reading.
 #   GitHub Release         none
 #   npm auth               bootstrap token in secrets.NPM_TOKEN, used only by
 #                          the two publish steps in the `publish` job
@@ -228,17 +230,30 @@ jobs:
     if: ${{ inputs.publish && inputs.confirm == 'PUBLISH FLOWCMS' }}
     environment: npm-publish
     permissions:
-      # THE ONLY ELEVATED PERMISSIONS IN THE ENTIRE PIPELINE, scoped to this job.
-      contents: write # create the GitHub Release, when that step is enabled
+      # THE ONLY ELEVATED PERMISSION IN THE ENTIRE PIPELINE, scoped to this job.
+      #
+      # `contents` stays READ. The active bootstrap path publishes to npm and
+      # writes nothing back to the repository: the GitHub Release step below is
+      # disabled, and it is the only thing here that would need write. Enabling
+      # that step means adding `contents: write` back in the same commit — the
+      # permission arrives with the capability that needs it, not before it.
+      contents: read
       id-token: write # npm provenance (OIDC), so the tarball is attestable
     steps:
+      # Checkout is FIRST because every gate below reads the repository. A
+      # precondition that runs before checkout cannot see the manifests it
+      # claims to be checking, and reports their absence as a metadata defect.
+      - name: Checkout
+        uses: actions/checkout@v5
+
       # ---------------------------------------------------------------------
       # RELEASE_PRECONDITIONS
       #
-      # Deliberately UNCONDITIONAL and first. It asserts the ORDERING facts a
-      # green pipeline cannot tell you about: the repository is public before a
-      # provenance publish, and the manifests carry the `repository` field that
-      # provenance resolves and npm renders as the package's source link.
+      # Deliberately UNCONDITIONAL, and the first thing after checkout. It
+      # asserts the ORDERING facts a green pipeline cannot tell you about: the
+      # repository is public before a provenance publish, and the manifests
+      # carry the `repository` field that provenance resolves and npm renders
+      # as the package's source link.
       # ---------------------------------------------------------------------
       - name: RELEASE_PRECONDITIONS
         run: |
@@ -259,9 +274,6 @@ jobs:
           [ "$fail" -eq 0 ] || exit 1
           echo "release preconditions hold: public repository, repository metadata present"
 
-      - name: Checkout
-        uses: actions/checkout@v5
-
       - name: Set up Node with the npm registry
         uses: actions/setup-node@v5
         with:
@@ -270,25 +282,86 @@ jobs:
 
       # ---------------------------------------------------------------------
       # The registry has the final say on the names, and it can change between
-      # one release attempt and the next. Checked here, immediately before
-      # publishing, rather than trusted from an earlier phase.
+      # one release attempt and the next. Checked here, immediately before the
+      # install/build/publish sequence, rather than trusted from an earlier
+      # check made hours or days ago.
       #
-      # `npm view` exits non-zero for a name that does not exist, which is the
-      # outcome we want; anything else means the name is taken.
+      # This gate FAILS CLOSED, and that is the whole point of it. The obvious
+      # way to write it — `npm view <name> || echo available` — treats EVERY
+      # failure as proof the name is free: a 404, yes, but equally a DNS
+      # failure, a TLS failure, a proxy sitting in front of the runner, a
+      # registry outage, or an npm client that fell over. Those are the exact
+      # conditions under which nobody should be publishing, and it reads them
+      # all as a green light.
+      #
+      # So: only an authoritative HTTP 404 from the registry means available.
+      # 200 means the name is taken. Anything else — any other status, any
+      # thrown request — refuses. And a positive control against a package that
+      # is certainly there proves the registry is answering truthfully at all
+      # before either 404 is believed; without it, a captive proxy answering
+      # 404 to everything would read as two free names.
+      #
+      # Public, unauthenticated reads. NODE_AUTH_TOKEN is deliberately NOT in
+      # this step's environment: nothing here needs to prove who it is.
       # ---------------------------------------------------------------------
-      - name: The package names are still available
+      - name: The package names are still available (fail-closed)
         run: |
-          set -e
-          fail=0
-          for name in flowcms create-flowcms; do
-            if npm view "$name" version >/dev/null 2>&1; then
-              echo "::error::npm already has a package called '$name'. Publishing would fail or land on somebody else's name - stop and decide on a scope."
-              fail=1
-            else
-              echo "$name: available"
-            fi
-          done
-          [ "$fail" -eq 0 ] || exit 1
+          set -euo pipefail
+          node - <<'NODE'
+          const REGISTRY = 'https://registry.npmjs.org';
+          const NAMES = ['flowcms', 'create-flowcms'];
+          const CONTROL = 'react';
+
+          // Abbreviated metadata: the smallest response the registry will give
+          // for "does this name exist", and no credentials attached.
+          async function statusOf(name) {
+            const response = await fetch(`${REGISTRY}/${encodeURIComponent(name)}`, {
+              method: 'GET',
+              redirect: 'follow',
+              headers: { accept: 'application/vnd.npm.install-v1+json' },
+              signal: AbortSignal.timeout(15000),
+            });
+            return response.status;
+          }
+
+          (async () => {
+            // POSITIVE CONTROL. A 404 is only evidence if a 200 is reachable.
+            let control;
+            try {
+              control = await statusOf(CONTROL);
+            } catch (error) {
+              console.log(`::error::the registry could not be reached at all: the positive-control request for '${CONTROL}' threw (${error.name}: ${error.message}). A 404 from an unreachable registry proves nothing, so publication is refused rather than guessed at.`);
+              process.exit(1);
+            }
+            if (control !== 200) {
+              console.log(`::error::the positive-control request for '${CONTROL}' answered HTTP ${control}, not 200. Something between this runner and the registry is not telling the truth, so the availability answers below cannot be trusted. Publication refused.`);
+              process.exit(1);
+            }
+            console.log(`positive control: ${CONTROL} -> HTTP 200, the registry is answering`);
+
+            let fail = 0;
+            for (const name of NAMES) {
+              let status;
+              try {
+                status = await statusOf(name);
+              } catch (error) {
+                console.log(`::error::the availability request for '${name}' threw (${error.name}: ${error.message}). Refusing to read a failed request as an available name.`);
+                fail = 1;
+                continue;
+              }
+              if (status === 404) {
+                console.log(`${name}: HTTP 404, the name is free`);
+              } else if (status === 200) {
+                console.log(`::error::npm already has a package called '${name}'. Publishing would fail, or land on somebody else's name - stop and decide on a scope.`);
+                fail = 1;
+              } else {
+                console.log(`::error::the registry answered HTTP ${status} for '${name}'. Only an authoritative 404 means the name is available; every other answer is refused.`);
+                fail = 1;
+              }
+            }
+            process.exit(fail);
+          })();
+          NODE
 
       - name: Install
         run: npm ci --no-audit --no-fund
@@ -332,7 +405,10 @@ jobs:
       # The GitHub Release is prepared but NOT enabled. Creating it is a
       # separate deliberate act, after the packages exist and after Trusted
       # Publishing replaces the bootstrap token. Enabling it means removing the
-      # `if: ${{ false }}` below, in a commit, with a name on it.
+      # `if: ${{ false }}` below, in a commit, with a name on it — and, in that
+      # same commit, restoring `contents: write` to this job's permissions,
+      # which `gh release create` needs and which the publish path deliberately
+      # does without for as long as this step stays off.
       # ---------------------------------------------------------------------
       - name: Create the GitHub Release
         if: ${{ false }}
