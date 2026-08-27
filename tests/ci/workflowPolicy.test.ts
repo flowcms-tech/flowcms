@@ -95,15 +95,57 @@ describe("least privilege", () => {
     }
   })
 
-  it("scopes the release workflow's elevated permissions to the publish job", () => {
+  it("keeps the release workflow's one elevated permission scoped to the publish job", () => {
     const source = withoutComments(read(RELEASE))
     const publishAt = source.indexOf("\n  publish:")
     expect(publishAt, "release.yml has no publish job").toBeGreaterThan(-1)
 
-    for (const key of ["contents", "id-token"]) {
-      const at = source.search(new RegExp(`^\\s+${key}: write\\b`, "m"))
-      expect(at, `release.yml never asks for ${key}: write`).toBeGreaterThan(-1)
-      expect(at, `${key}: write is declared outside the publish job`).toBeGreaterThan(publishAt)
+    // The elevation belongs to one job. Raising the top-level block would hand
+    // it to every tier, including the ones that only run tests.
+    expect(source, "release.yml's top-level permissions are not read-only").toMatch(
+      /^permissions:\n\s+contents: read\b/m,
+    )
+
+    // npm provenance is OIDC, and refuses without it.
+    const idToken = source.search(/^\s+id-token: write\b/m)
+    expect(idToken, "release.yml never asks for id-token: write").toBeGreaterThan(-1)
+    expect(idToken, "id-token: write is declared outside the publish job").toBeGreaterThan(
+      publishAt,
+    )
+
+    /**
+     * LEAST PRIVILEGE, tied to the one capability that would need it.
+     *
+     * `contents: write` exists in this file for exactly one thing:
+     * `gh release create`. While that step is disabled the publish path writes
+     * nothing back to the repository, so requesting write would hand the job a
+     * token it never spends — and a token nobody spends is one nobody notices
+     * being misused.
+     *
+     * The assertion runs in both directions deliberately. Disabled step: write
+     * must be absent. Enabled step: write must be present AND scoped to this
+     * job. Neither half can be changed on its own, so the permission and the
+     * capability that justifies it always arrive in the same commit.
+     */
+    const releaseStepAt = source.indexOf("name: Create the GitHub Release")
+    const releaseStepIsDisabled =
+      releaseStepAt === -1 ||
+      /if:\s*\$\{\{\s*false\s*\}\}/.test(source.slice(releaseStepAt, releaseStepAt + 300))
+
+    if (releaseStepIsDisabled) {
+      expect(
+        source.match(/^\s*contents: write\b/gm) ?? [],
+        "release.yml asks for contents: write while the GitHub Release step is disabled",
+      ).toEqual([])
+    } else {
+      const contents = source.search(/^\s+contents: write\b/m)
+      expect(
+        contents,
+        "the GitHub Release step is enabled but the job cannot write contents",
+      ).toBeGreaterThan(-1)
+      expect(contents, "contents: write is declared outside the publish job").toBeGreaterThan(
+        publishAt,
+      )
     }
   })
 })
@@ -362,6 +404,29 @@ describe("docker gates", () => {
 describe("release safety", () => {
   const raw = () => read(RELEASE)
 
+  /**
+   * The publish job's steps, in order, each bounded to its own text.
+   *
+   * Bounding matters: several assertions below are about what a step does NOT
+   * contain, and a search across the whole file would find the thing in some
+   * other step and pass for the wrong reason. `registry.npmjs.org`, for one,
+   * appears both in the setup-node registry-url and in the availability gate.
+   */
+  function publishSteps(text: string): { name: string; body: string; at: number }[] {
+    const jobAt = text.indexOf("\n  publish:")
+    if (jobAt === -1) return []
+    // The publish job is the last job in the file, so it runs to the end.
+    const job = text.slice(jobAt)
+    const heads: { name: string; index: number }[] = []
+    const head = /^ {6}- name: (.+)$/gm
+    let match: RegExpExecArray | null
+    while ((match = head.exec(job))) heads.push({ name: match[1].trim(), index: match.index })
+    return heads.map((step, i) => {
+      const end = i + 1 < heads.length ? heads[i + 1].index : job.length
+      return { name: step.name, body: job.slice(step.index, end), at: jobAt + step.index }
+    })
+  }
+
   // Publication is no longer blocked outright — the bootstrap release path is
   // live. What these assert is that it stays DELIBERATE: four independent
   // things must line up before anything reaches the registry, and none of them
@@ -463,10 +528,80 @@ describe("release safety", () => {
     expect(text).toMatch(/flowcms-theme-aurora/)
   })
 
-  it("verifies the npm names immediately before publishing", () => {
-    // The registry can change between one release attempt and the next, so this
-    // belongs in the publish job rather than in an earlier phase's notes.
-    expect(withoutComments(raw())).toMatch(/npm view/)
+  it("gates publication on a fail-closed registry check of both package names", () => {
+    /**
+     * THE DEFECT THIS PINS.
+     *
+     * The obvious way to ask whether a name is free —
+     *
+     *     if npm view "$name" >/dev/null 2>&1; then taken; else available; fi
+     *
+     * — reads EVERY failure as proof the name is free. A 404, yes. But equally
+     * a DNS failure, a TLS failure, a proxy in front of the runner, a registry
+     * outage, a 429, or an npm client that fell over. Those are precisely the
+     * conditions under which nobody should be publishing, and that shape waves
+     * all of them through while printing a reassuring "available".
+     *
+     * So the property worth pinning is not which command is used. It is that
+     * only an authoritative 404 is read as available, and that everything else
+     * — including the registry being unreachable — refuses.
+     */
+    const text = withoutComments(raw())
+    const steps = publishSteps(text)
+    expect(steps.length, "release.yml has no publish job with named steps").toBeGreaterThan(0)
+
+    // The gate is the step that talks to the registry itself, not the one that
+    // merely points npm at it.
+    const gate = steps.find(
+      (step) =>
+        /registry\.npmjs\.org/.test(step.body) && !/uses:\s*actions\/setup-node/.test(step.body),
+    )
+    expect(gate, "the publish job has no step that queries the npm registry").toBeDefined()
+    if (!gate) return
+
+    // Exactly the two names this repository may publish.
+    expect(gate.body, "the availability gate does not check flowcms").toMatch(/['"]flowcms['"]/)
+    expect(gate.body, "the availability gate does not check create-flowcms").toMatch(
+      /['"]create-flowcms['"]/,
+    )
+
+    // A positive control. Without one, a captive proxy answering 404 to
+    // everything reads as two free names and the publication proceeds.
+    expect(gate.body, "the availability gate has no positive control").toMatch(/['"]react['"]/)
+
+    // 404 is the only answer that means available; 200 means the name is taken.
+    expect(gate.body, "the availability gate does not distinguish a 404").toMatch(/===\s*404/)
+    expect(gate.body, "the availability gate does not distinguish a 200").toMatch(/===\s*200/)
+
+    // A thrown request must refuse rather than fall through to available.
+    expect(gate.body, "the availability gate does not catch a failed request").toMatch(
+      /catch\s*\(/,
+    )
+
+    // The three shapes that quietly turn a gate back into a rubber stamp.
+    expect(gate.body, "the availability gate re-introduces the fail-open npm view idiom").not.toMatch(
+      /npm view/,
+    )
+    expect(gate.body, "the availability gate swallows its own failure").not.toMatch(/\|\|\s*true/)
+    expect(gate.body, "the availability gate cannot fail the job").not.toMatch(
+      /continue-on-error/,
+    )
+
+    // Public reads. Nothing here needs to prove who it is, and a token in this
+    // step's environment would be a token handed to a step that never spends it.
+    expect(gate.body, "the availability gate is handed an npm token").not.toMatch(
+      /NODE_AUTH_TOKEN|NPM_TOKEN/,
+    )
+    expect(gate.body, "the availability gate declares an environment block").not.toMatch(
+      /^\s*env:/m,
+    )
+
+    // And it has to run BEFORE anything is published, not beside it.
+    const firstPublish = text.search(/run: npm publish\b/)
+    expect(firstPublish, "release.yml has no publish step").toBeGreaterThan(-1)
+    expect(gate.at, "the availability gate runs after publication has begun").toBeLessThan(
+      firstPublish,
+    )
   })
 
   it("leaves the GitHub Release step unreachable until it is deliberately enabled", () => {

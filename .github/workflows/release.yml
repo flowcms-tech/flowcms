@@ -11,9 +11,7 @@
 #   repository             PUBLIC, github.com/flowcms-tech/flowcms
 #   repository metadata    repository/bugs/homepage present in both manifests
 #   npm                    NOTHING PUBLISHED YET
-#   git tag                v0.1.0 exists. It was cut before this file's publish
-#                          path was corrected, so it does not point at the
-#                          version of this workflow you are reading.
+#   git tag                v0.1.0 exists
 #   GitHub Release         none
 #   npm auth               bootstrap token in secrets.NPM_TOKEN, used only by
 #                          the two publish steps in the `publish` job
