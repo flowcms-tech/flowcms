@@ -17,7 +17,7 @@ a pipeline becomes something people route around.
 
 | Tier | Trigger | Workflows | Roughly |
 |---|---|---|---|
-| **Pull request** | every PR, every push to `main` | `ci.yml`, `portability.yml`'s `unit` matrix (+ `docker.yml` when a Docker-relevant file changed) | minutes |
+| **Pull request** | every PR, every push to `main` | `ci.yml`, `portability.yml`'s `unit` matrix, `docker.yml` (which always runs, but builds an image only when a Docker-relevant file changed) | minutes |
 | **Main** | push to `main`, nightly | `docker.yml`, `database-matrix.yml`, `consumer-proofs.yml`, `portability.yml` | tens of minutes |
 | **Release** | version tag, manual dispatch | `release.yml`, which calls all five of the above | the lot, plus the compose topology matrix and the package-manager matrix |
 
@@ -55,11 +55,20 @@ tier already covers the default topology at zero cost.
 runs the same `npm test` on Windows and macOS on every pull request; the rest of
 that file is main-tier. See [`portability.yml`](#portabilityyml--windows-macos-and-the-other-three-package-managers).
 
-**No Docker, usually.** `docker.yml` carries a `paths:` filter and runs on a
-pull request only when the `Dockerfile`, `docker/`, a compose file,
-`next.config.ts`, the lockfile or one of the entrypoint scripts changed. A
+**No Docker build, usually.** `docker.yml` runs on every pull request, but its
+`image` job builds a container only when the `Dockerfile`, `docker/`, a compose
+file, `next.config.ts`, the lockfile or one of the entrypoint scripts changed. A
 container build is minutes; paying it on a blog-post typo is not a gate, it is a
 tax.
+
+**The filter is a job, not a trigger, and that is deliberate.** It used to be
+`paths:` on the `pull_request` trigger. That is the obvious place for it and it
+cannot be used here, because `Docker gate` is meant to be a required check: a
+filtered-out workflow never runs, a workflow that never runs reports no check,
+and a required check that is never reported leaves the pull request pending
+forever — with a symptom that does not name its cause. So `docker.yml`'s
+`changes` job answers "is Docker relevant?" *inside* a run that always happens.
+`tests/ci/workflowPolicy.test.ts` fails if the trigger-level filter comes back.
 
 ### Running the PR tier locally
 
@@ -78,8 +87,14 @@ node scripts/verify-artifact-hygiene.mjs
 
 ## Main gates
 
-Everything below runs on a push to `main` and again nightly. None of it blocks a
-pull request.
+Everything below runs on a push to `main` and again nightly.
+
+**One exception, and it is deliberate: `docker.yml` straddles this tier and the
+pull-request tier.** It runs on every pull request too, and its `Docker gate`
+reports there — so once that gate is a required check, a Docker failure blocks a
+merge rather than being discovered afterwards. The two remaining main-tier
+workflows, `database-matrix.yml` and `consumer-proofs.yml`, have no
+`pull_request` trigger at all and block nothing.
 
 ### `docker.yml` — the image
 
@@ -99,6 +114,23 @@ cheapest place to keep that promise honest.
 `generated-image` runs `scripts/verify-create-flowcms.mjs` in full, including
 the `docker build` whose context is a project generated **outside** this
 repository by the packed `create-flowcms`. Nightly, manual and release only.
+
+`changes` is the third job and the cheapest: a checkout and a `git diff` against
+the pull request's merge base, matching the eleven Docker-relevant paths. On any
+event with no base ref — a push, the nightly, a dispatch, or `release.yml`
+calling this workflow — it short-circuits to "relevant" before touching git, so
+nothing outside a pull request depends on the diff. It is written that way
+rather than as a check on `github.event_name` for the reason in
+[Depth is an input](#depth-is-an-input-never-the-callers-event): inside a called
+workflow that name belongs to the caller.
+
+`Docker gate` is the fourth, and the only one worth naming in branch protection.
+It `needs` the other three, runs with `if: always()`, and fails when any of them
+reports `failure` or `cancelled`. It **passes on `skipped`**, which is the
+difference between it and `CI gate`: `ci.yml`'s four jobs always run, so a skip
+there is a defect, whereas here `image` is legitimately off on a pull request
+with no Docker-relevant change and `generated-image` is legitimately off outside
+full depth. `Portability gate` tolerates skips for the same reason.
 
 **Nothing in this pipeline pushes an image.** There is no registry login, no
 credential and no `docker push`; the images die with the runner. Publishing an
@@ -579,7 +611,7 @@ job in the pipeline installs only from the lockfile.
 
 | File | What it pins |
 |---|---|
-| `tests/ci/workflowPolicy.test.ts` | least privilege, action pinning (including runner images inside a matrix), `npm ci`, Node 22, no secret in YAML, MariaDB independence, no `docker push`, depth-as-an-input rather than the caller's event, the portability matrix's shape, and every release block |
+| `tests/ci/workflowPolicy.test.ts` | least privilege, action pinning (including runner images inside a matrix), `npm ci`, Node 22, no secret in YAML, MariaDB independence, no `docker push`, depth-as-an-input rather than the caller's event, the portability matrix's shape, every release block — and, for `docker.yml`: that pull requests are not filtered at trigger level, that `Docker gate` always runs and tolerates a legitimate skip, and that the relevance detector still matches every path the old trigger filter covered and nothing more |
 | `tests/ci/artifactHygiene.test.ts` | the deny list, the `.env.example` exception, and that violations carry names and rule ids rather than content |
 
 Both run inside `npm test`, so they are pull-request gates like everything else.

@@ -19,25 +19,23 @@
 #                    this repository by the packed create-flowcms.
 #
 # On a pull request only `image` runs, and only when a Docker-relevant file
-# changed — the `paths:` filter below. A container build is minutes; paying it
-# on a blog-post typo is how a pipeline becomes something people route around.
+# changed. A container build is minutes; paying it on a blog-post typo is how a
+# pipeline becomes something people route around.
+#
+# THAT DECISION IS UNCHANGED. WHERE IT IS ENFORCED IS NOT.
+#
+# It used to be a `paths:` filter on the `pull_request` trigger. It cannot live
+# there any more, because `Docker gate` below is meant to be a REQUIRED check:
+# a filtered-out workflow does not run, a workflow that does not run reports no
+# check, and a required check that is never reported leaves the pull request
+# pending forever — with a symptom that does not name its cause. So the
+# question "is Docker relevant here?" is answered by the `changes` job, INSIDE
+# a run that always happens, where a gate always exists to report the answer.
 # ---------------------------------------------------------------------------
 name: Docker
 
 on:
   pull_request:
-    paths:
-      - "Dockerfile"
-      - ".dockerignore"
-      - "docker/**"
-      - "compose*.yml"
-      - "next.config.ts"
-      - "package.json"
-      - "package-lock.json"
-      - "scripts/collect-db-drivers.mjs"
-      - "scripts/migrate.mjs"
-      - "scripts/bootstrap-owner.mjs"
-      - ".github/workflows/docker.yml"
   push:
     branches: [main]
   schedule:
@@ -76,9 +74,80 @@ env:
 
 jobs:
   # -------------------------------------------------------------------------
+  # Is Docker relevant to this run?
+  #
+  # The eleven paths below are the ones the `pull_request` trigger used to
+  # carry, moved here unchanged. See the note at the top of this file for why
+  # they had to move.
+  # -------------------------------------------------------------------------
+  changes:
+    name: Docker-relevant changes
+    runs-on: ubuntu-24.04
+    outputs:
+      docker: ${{ steps.detect.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The three-dot diff below needs the merge base, which a shallow
+          # clone does not have.
+          fetch-depth: 0
+
+      - id: detect
+        env:
+          # Passed as an environment variable and dereferenced as a quoted
+          # shell variable, never interpolated into the script body: a branch
+          # name is attacker-controlled on a fork pull request.
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+
+          # No base ref means this is not a pull request — a push to main, the
+          # nightly, a dispatch, or release.yml calling this workflow. Every one
+          # of those builds unconditionally, exactly as it does today.
+          #
+          # Deliberately NOT written as a comparison against `github.event_name`:
+          # inside a called workflow that is the CALLER's event, so a release cut
+          # from a `v*` tag reports `push`. See the note on `full` above, and
+          # tests/ci/workflowPolicy.test.ts's "depth is an input" suite.
+          if [ -z "$BASE_REF" ]; then
+            echo "not a pull request — Docker is relevant by default"
+            echo "docker=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! git rev-parse --verify --quiet "origin/$BASE_REF" >/dev/null; then
+            # Fail OPEN. A wasted image build is visible in the log; a Docker
+            # regression that never ran is not.
+            echo "::warning::cannot resolve origin/$BASE_REF — assuming Docker is relevant"
+            echo "docker=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed="$(git diff --name-only "origin/$BASE_REF...HEAD")"
+          echo "changed files:"
+          echo "$changed"
+
+          # Anchored at ^ so `docs/Dockerfile-notes.md` does not count, and so
+          # `package.json` means the root manifest rather than every package's.
+          if printf '%s\n' "$changed" | grep -Eq '^(Dockerfile|\.dockerignore|docker/|compose[^/]*\.yml|next\.config\.ts|package\.json|package-lock\.json|scripts/collect-db-drivers\.mjs|scripts/migrate\.mjs|scripts/bootstrap-owner\.mjs|\.github/workflows/docker\.yml)'; then
+            echo "Docker-relevant change detected"
+            echo "docker=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no Docker-relevant change"
+            echo "docker=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # -------------------------------------------------------------------------
   image:
     name: Source image build and runtime smoke
     runs-on: ubuntu-24.04
+    needs: [changes]
+    # `!= 'pull_request'` is the one event comparison permitted in this file —
+    # the "depth is an input" suite forbids `push` and `workflow_dispatch`
+    # comparisons and blesses this one. It is redundant with `changes`'s own
+    # short-circuit and kept deliberately: if that script is ever mis-edited,
+    # every non-pull-request event still builds.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.docker == 'true' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -222,3 +291,32 @@ jobs:
       - name: Remove the probe image
         if: always()
         run: docker rmi --force flowcms-generated:probe >/dev/null 2>&1 || true
+
+  # -------------------------------------------------------------------------
+  # The one check to name in branch protection. It must report on EVERY pull
+  # request — which is the whole reason this file no longer filters at trigger
+  # level — so that requiring it cannot leave an unrelated pull request waiting
+  # for a check that never arrives.
+  # -------------------------------------------------------------------------
+  gate:
+    name: Docker gate
+    runs-on: ubuntu-24.04
+    needs: [changes, image, generated-image]
+    if: always()
+    steps:
+      - name: Fail if a Docker job did not succeed
+        run: |
+          results='${{ join(needs.*.result, ',') }}'
+          echo "job results: $results"
+          # `skipped` is legitimate: `image` is off on a pull request with no
+          # Docker-relevant change, and `generated-image` is off outside full
+          # depth. ci.yml's gate treats a skip as failure — correct there, where
+          # all four of its jobs always run — and copying that here would fail
+          # every documentation-only pull request.
+          case "$results" in
+            *failure*|*cancelled*)
+              echo "::error::a Docker job did not succeed"
+              exit 1
+              ;;
+          esac
+          echo "no Docker job failed"
