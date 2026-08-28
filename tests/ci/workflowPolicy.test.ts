@@ -462,6 +462,24 @@ describe("database matrix", () => {
 describe("docker gates", () => {
   const source = () => withoutComments(read("docker.yml"))
 
+  /**
+   * The extended regex the relevance job matches changed file names against.
+   *
+   * Scoped to that job on purpose. A check that searched the whole file would
+   * stay green after a path was dropped from the detector, as long as the same
+   * string survived anywhere else in the workflow — another job, a step name,
+   * an echo. The residual risk this design carries is a SILENT under-run, where
+   * Docker quietly stops running and the gate still reports green, so the
+   * assertion has to read the thing that actually decides.
+   */
+  function relevancePattern(text: string): string | undefined {
+    const at = text.indexOf("name: Docker-relevant changes")
+    if (at === -1) return undefined
+    const nextJob = text.indexOf("\n  image:", at)
+    const job = text.slice(at, nextJob === -1 ? text.length : nextJob)
+    return job.match(/grep -Eq\s+'([^']+)'/)?.[1]
+  }
+
   it("builds an image and never pushes one", () => {
     const text = source()
     expect(text).toMatch(/docker build/)
@@ -481,6 +499,102 @@ describe("docker gates", () => {
 
   it("checks that no configured secret reached the container log", () => {
     expect(source()).toMatch(/No secret reached the container log/)
+  })
+
+  it("does not filter pull requests at trigger level", () => {
+    // A workflow-level `paths:` filter means the workflow — and therefore any
+    // gate inside it — does not exist on an unrelated pull request. A required
+    // check that is never reported blocks merging forever, and the symptom (a
+    // pull request pending with no explanation) does not name its cause.
+    // Relevance is decided inside the run instead; see the `changes` job.
+    const text = source()
+    const on = text.slice(text.indexOf("on:"), text.indexOf("permissions:"))
+    const pr = on.indexOf("pull_request:")
+    expect(pr, "docker.yml no longer runs on pull requests at all").toBeGreaterThan(-1)
+
+    // Everything between `pull_request:` and the next key at the same or lower
+    // indentation is that trigger's own block.
+    const rest = on.slice(pr + "pull_request:".length)
+    const end = rest.search(/\n {0,2}\S/)
+    const block = end === -1 ? rest : rest.slice(0, end)
+    expect(block, "docker.yml filters pull requests at trigger level again").not.toMatch(
+      /^\s*paths(-ignore)?:/m,
+    )
+  })
+
+  it("exposes one always-reporting gate that tolerates a legitimate skip", () => {
+    const text = source()
+    expect(text, "docker.yml has no Docker gate").toMatch(/name:\s*Docker gate/)
+
+    const at = text.indexOf("name: Docker gate")
+    const job = text.slice(at, at + 1000)
+    expect(job, "the gate does not always run, so it cannot always report").toMatch(
+      /if:\s*always\(\)/,
+    )
+    expect(job, "the gate does not aggregate the image job").toMatch(/needs:[^\n]*\bimage\b/)
+    expect(job, "the gate ignores failure or cancellation").toMatch(/\*failure\*\|\*cancelled\*/)
+    // `skipped` is legitimate and must stay legitimate: `image` is off on a
+    // pull request with no Docker-relevant change, and `generated-image` is off
+    // outside full depth. `CI gate` treats a skip as failure — correctly, for
+    // its own always-run jobs — and copying that here would fail every
+    // documentation-only pull request.
+    expect(job, "the gate treats a legitimate skip as a failure").not.toMatch(/\*skipped\*/)
+  })
+
+  it("matches every path the trigger filter covered, and nothing else", () => {
+    // READS THE THING THAT DECIDES, not the file that contains it.
+    //
+    // An earlier draft ran `toContain` over the whole of docker.yml. That is
+    // weaker than it looks: drop a path from the detector and the assertion
+    // stays green as long as the same string survives anywhere else in the
+    // workflow.
+    //
+    // It is EXECUTED rather than string-matched, which also makes it immune to
+    // escaping style: `next\.config\.ts` and `next[.]config[.]ts` are the same
+    // detector and must both pass. (JS regex and POSIX ERE differ in corners
+    // this pattern does not use — alternation, anchors, escaped dots and one
+    // negated class.)
+    const pattern = relevancePattern(source())
+    // Fails CLOSED. If the detection idiom changes, this test must be updated
+    // deliberately rather than silently passing over a pattern it cannot see.
+    expect(
+      pattern,
+      "no `grep -Eq '…'` relevance pattern found in the Docker-relevant changes job",
+    ).toBeDefined()
+
+    const relevant = new RegExp(pattern as string)
+
+    // Every path the trigger filter used to carry, as a real file name.
+    for (const file of [
+      "Dockerfile",
+      ".dockerignore",
+      "docker/entrypoint.sh",
+      "compose.yml",
+      "compose.postgres.yml",
+      "next.config.ts",
+      "package.json",
+      "package-lock.json",
+      "scripts/collect-db-drivers.mjs",
+      "scripts/migrate.mjs",
+      "scripts/bootstrap-owner.mjs",
+      ".github/workflows/docker.yml",
+    ]) {
+      expect(relevant.test(file), `the relevance pattern no longer matches ${file}`).toBe(true)
+    }
+
+    // And the other direction, which a `toContain` check cannot express at all:
+    // an unanchored or over-broad pattern would pay for a container build on
+    // every documentation commit, which is the cost this design exists to
+    // avoid.
+    for (const file of [
+      "README.md",
+      "docs/ci.md",
+      "docs/Dockerfile-notes.md",
+      "src/app/page.tsx",
+      "packages/create-flowcms/package.json",
+    ]) {
+      expect(relevant.test(file), `the relevance pattern now matches ${file}`).toBe(false)
+    }
   })
 })
 
