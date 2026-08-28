@@ -22,9 +22,9 @@ field for a database URL, an S3 credential, an admin path or a server secret,
 and the request schema rejects unknown keys rather than ignoring them.
 
 The `create-flowcms` scaffolder generates the deployment configuration before
-the application starts. It **exists in this repository**
-(`packages/create-flowcms`) and is **not published** — `npx create-flowcms` does
-not resolve today, and no document should imply it does.
+the application starts. It is published on npm, so
+`npx create-flowcms@latest my-site` is the usual way in; its source is
+`packages/create-flowcms` in this repository.
 
 **The line above still holds either way.** `create-flowcms` writes deployment
 configuration — a `.env`, a Dockerfile, a Compose file — and nothing else. It

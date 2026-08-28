@@ -147,8 +147,6 @@ API, database and object storage, and no external backend.
   [`docs/distribution/create-flowcms.md`](docs/distribution/create-flowcms.md).
 - No release automation is wired up yet; see `docs/ci.md` when it lands.
 
-<!--
-No comparison links. Nothing has been tagged yet, so a link reference here
-would point nowhere. Add the `[Unreleased]` and `[0.1.0]` link definitions in
-the same change that cuts the first tag.
--->
+[Unreleased]: https://github.com/flowcms-tech/flowcms/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/flowcms-tech/flowcms/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/flowcms-tech/flowcms/releases/tag/v0.1.0

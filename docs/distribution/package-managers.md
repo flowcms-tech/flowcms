@@ -10,12 +10,12 @@ Everything here is stated on two axes, kept deliberately apart:
 
 They are not the same claim, and this document never merges them into one.
 
-> **The registry invocation forms do not work yet.** `npx create-flowcms`,
-> `npm create flowcms`, `pnpm create flowcms`, `yarn create flowcms` and
-> `bun create flowcms` all fail for one reason — `create-flowcms` is not on npm
-> ([status](../../README.md#project-status)). Treat every such command here as
-> what will work after publication. Everything else in this document describes
-> the managers as they behave today, from a checkout.
+> **The registry invocation forms work.** `create-flowcms` is published, so
+> `npx create-flowcms@latest`, `npm create flowcms@latest`,
+> `pnpm create flowcms`, `yarn create flowcms` and `bun create flowcms` all
+> resolve ([status](../../README.md#project-status)). The support tiers below
+> are about what each manager does as the *generated project's* package
+> manager, which is a separate question from which one invoked the scaffolder.
 
 ## Support tiers, and what verification means
 

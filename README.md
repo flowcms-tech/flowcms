@@ -4,11 +4,15 @@ A self-hosted content management system built on Next.js — a public site plus 
 admin panel, a blog, custom pages, media management, first-class SEO tooling,
 and a theme system for everything the visitor sees.
 
-> **Status: pre-release.** FlowCMS is licensed **GPL-2.0-or-later** (see
-> [`LICENSE`](LICENSE)). Nothing has been published yet: the `flowcms` and
-> `create-flowcms` npm packages, the first release tag and the first GitHub
-> release are all still to come. Everything below runs from a checkout or a
-> locally packed tarball. See [Project status](#project-status).
+> **Status: early release.** FlowCMS is licensed **GPL-2.0-or-later** (see
+> [`LICENSE`](LICENSE)). `flowcms` and `create-flowcms` are published on npm at
+> **0.1.1**, cut from the `v0.1.1` tag. It is a 0.x project: the feature set is
+> complete and exercised, but the API and the theme contract may still move
+> between minor versions. See [Project status](#project-status).
+
+```bash
+npx create-flowcms@latest my-site
+```
 
 ## What it does
 
@@ -186,9 +190,13 @@ name, which is why the two differ. See
 application in a directory of your choosing, with its own package metadata, its
 own git history, and nothing pointing back at this repository.
 
-> `npx create-flowcms my-site` does **not** work yet — the package is not on npm
-> (see [Project status](#project-status)). Today it runs from a local checkout
-> or a packed tarball.
+```bash
+npx create-flowcms@latest my-site
+```
+
+Or through any package manager's create shorthand — `npm create flowcms@latest`,
+`pnpm create flowcms`, `yarn create flowcms`, `bun create flowcms`. npm parses
+its own flags first, so options for the scaffolder go after `--`.
 
 It asks for the deployment target, database, storage, Redis, admin path and
 package manager, or takes them as flags for unattended use. Nothing about your
@@ -308,14 +316,15 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) and
 
 ## Project status
 
-Feature work for the first public release is complete: themes, multi-database
-support, Docker, first-run setup, the theme package and the `create-flowcms`
-scaffolder all exist and run from a checkout. What is still outstanding is
-release, not product:
+FlowCMS is released and installable. `flowcms` and `create-flowcms` are on npm
+at **0.1.1**, published from the `v0.1.1` tag through npm Trusted Publishing,
+with provenance attested to the workflow run that built them. Themes,
+multi-database support, Docker, first-run setup, the theme package and the
+`create-flowcms` scaffolder all exist and are exercised in CI on Linux, macOS
+and Windows.
 
-- **Publishing** — neither `flowcms` nor `create-flowcms` is on npm, and no
-  release tag or GitHub release has been cut. Both packages are built and
-  exercised locally from packed tarballs.
+What is still outstanding is product, not release:
+
 - **Forms / submissions** — the previous, trade-specific lead-capture feature
   was removed rather than generalised. A generic replacement is unscheduled.
 - **Themes beyond the default** — the default theme's `/` is a deliberate

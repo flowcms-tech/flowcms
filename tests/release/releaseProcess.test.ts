@@ -328,14 +328,69 @@ describe("provenance is never claimed", () => {
   })
 })
 
-describe("public documents do not sell an unpublished package", () => {
-  it.each(["CHANGELOG.md", "README.md", "docs/ci.md"])("%s", (doc) => {
-    const guarded = PUBLISHABLE.some((dir) => existsSync(join(ROOT, dir, "publish-guard.mjs")))
-    if (!guarded) return
+describe("public documents do not sell a package that cannot be installed", () => {
+  /**
+   * THE SAME STALE PROXY AS THE CHANGELOG RULE, and retired for the same reason.
+   *
+   * This used to forbid `npx create-flowcms` and `npm install flowcms` outright
+   * whenever a `publish-guard.mjs` existed. That was right while the guards were
+   * unconditional refusals: an install instruction for a package nobody could
+   * install is a document that wastes a reader's afternoon. Since `157cf43` the
+   * guards are permanent and conditional, so the condition became always-true
+   * and the rule forbade documenting the install forever — of a published
+   * package, in the README whose job is to show it.
+   *
+   * The real question was never "does a guard exist". It is whether the
+   * instruction can be followed, and the file-visible evidence for that is
+   * whether the changelog records a released version. So: before the first
+   * dated release, no install instructions at all — the original rule, intact.
+   * After it, they are expected, and what is policed instead is that they do
+   * not pin a version this tree has not reached.
+   *
+   * Reads files only, like everything else here. No network, no git.
+   */
+  const releasedVersions = [
+    ...read("CHANGELOG.md").matchAll(/^## \[(\d+\.\d+\.\d+)\][^\n]*\d{4}-\d{2}-\d{2}/gm),
+  ].map((match) => match[1])
 
-    for (const line of read(doc).split("\n")) {
-      const instruction = /^\s*(?:\$\s*)?(npx create-flowcms|npm install flowcms)\b/.test(line)
-      expect(instruction, `${doc} instructs an install of an unpublished package: ${line.trim()}`).toBe(false)
-    }
-  })
+  const current = read("src/Themes/contract/version.ts").match(
+    /FLOWCMS_VERSION\s*=\s*"([^"]+)"/,
+  )?.[1]
+
+  /** `npx create-flowcms@1.2.3` / `npm install flowcms@1.2.3` — the pin, if any. */
+  const INSTRUCTION = /^\s*(?:\$\s*)?(?:npx create-flowcms|npm install (?:--save-peer )?flowcms)(?:@([^\s]+))?/
+
+  it.each(["CHANGELOG.md", "README.md", "docs/ci.md"])(
+    "%s only tells people to install what exists",
+    (doc) => {
+      for (const line of read(doc).split("\n")) {
+        const match = INSTRUCTION.exec(line)
+        if (!match) continue
+
+        expect(
+          releasedVersions.length,
+          `${doc} instructs an install, but the changelog records no released version: ${line.trim()}`,
+        ).toBeGreaterThan(0)
+
+        // A pin must name something this tree has reached. `@latest` and an
+        // unpinned specifier are both fine — they resolve to whatever the
+        // registry says is current, which is the registry's business.
+        //
+        // Group ONE: the alternation above is non-capturing, so the pin is the
+        // first capture. Reading `match[2]` here made this branch dead code and
+        // the whole rule vacuous — it passed a deliberately planted
+        // `npx create-flowcms@9.9.9`, which is how it was found.
+        const pinned = match[1]
+        if (!pinned || pinned === "latest") continue
+        if (!/^\d+\.\d+\.\d+$/.test(pinned)) continue
+
+        const [px, py, pz] = pinned.split(".").map(Number)
+        const [cx, cy, cz] = current!.split(".").map(Number)
+        expect(
+          Math.sign(px - cx || py - cy || pz - cz),
+          `${doc} pins ${pinned}, which is newer than FLOWCMS_VERSION ${current}: ${line.trim()}`,
+        ).toBeLessThanOrEqual(0)
+      }
+    },
+  )
 })

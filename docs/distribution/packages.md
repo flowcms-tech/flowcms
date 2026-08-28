@@ -2,20 +2,19 @@
 
 What FlowCMS publishes, what is public, and what a theme package may rely on.
 
-> **Nothing here is published yet** (see
-> [Project status](../../README.md#project-status)). `flowcms` is built and
-> packed locally, and `npm publish` is blocked on purpose — see
-> [Release blockers](#release-blockers). Do not write instructions that tell
-> people to `npm install flowcms` until that changes.
+> **Published.** `flowcms` and `create-flowcms` are on npm at **0.1.1**, cut
+> from the `v0.1.1` tag through npm Trusted Publishing, with provenance. See
+> [Project status](../../README.md#project-status) and
+> [How a release reaches npm](#how-a-release-reaches-npm).
 
 ## The model: one package, one public subpath
 
 | | What it is | Published? |
 |---|---|---|
-| `flowcms-app` (repository root) | the FlowCMS **application** — the CMS itself, and the template `create-flowcms` will later emit | never. `"private": true` |
-| `flowcms` (`packages/flowcms`) | the public **theme API**, built from `src/Themes/contract` | eventually. Blocked today |
+| `flowcms-app` (repository root) | the FlowCMS **application** — the CMS itself, and the template `create-flowcms` emits | never. `"private": true` |
+| `flowcms` (`packages/flowcms`) | the public **theme API**, built from `src/Themes/contract` | **yes** — `flowcms@0.1.1` |
 | `@example/flowcms-theme-aurora` | an example theme, used to prove the boundary | never. It is a fixture |
-| `create-flowcms` (`packages/create-flowcms`) | the scaffolder that generates a site — see [create-flowcms.md](./create-flowcms.md) | eventually. Blocked today |
+| `create-flowcms` (`packages/create-flowcms`) | the scaffolder that generates a site — see [create-flowcms.md](./create-flowcms.md) | **yes** — `create-flowcms@0.1.1` |
 
 There is one published package and it exposes one subpath:
 
@@ -352,36 +351,51 @@ with npm, and that is what the proofs above run.
 The package metadata uses nothing npm-specific — `exports`, `files`, `engines`,
 `peerDependencies` and `sideEffects` are all standard, and there is no
 `packageManager` field, no install lifecycle script and no `.npmrc` — so pnpm,
-yarn and bun should resolve it identically. **They have not been tested**, and
-this document will not claim they work until they have been. The future
-`npx create-flowcms` UX targets all four, which is when that testing belongs.
+yarn and bun should resolve it identically. **Resolution of the `flowcms`
+package by pnpm, yarn and bun has not been tested directly**, and this document
+will not claim it works until it has been. What *is* exercised for all four is
+the scaffolder — `portability.yml` scaffolds and installs a generated project
+with each — which is a different question and does not stand in for this one.
 
-## Release blockers
+## How a release reaches npm
 
-Nothing has been published yet. `flowcms` and `create-flowcms` are publishable
-when the release workflow is deliberately dispatched, and their `prepublishOnly`
-guards validate the licence, the repository metadata and the built artifacts
-before npm sends anything — refusing outright unless a real release is in
-progress, so a hand-run `npm publish` fails. `npm pack` is unaffected, so every
-proof above still runs. `@example/flowcms-theme-aurora` carries a guard of a
-different kind, alongside `"private": true`: the other two say *not yet*,
-Aurora's says *never* — it is an integration fixture and is not a package this
-project would publish under any circumstances.
+Both packages are published. The current release is **0.1.1**, cut from the
+`v0.1.1` tag.
 
-Still open before `flowcms` can be published:
+Publication is deliberately hard to trigger. `.github/workflows/release.yml`
+neither bumps versions nor creates tags: a `v*` tag push runs the proof tiers
+and *cannot* publish, and publication requires a manual `workflow_dispatch`
+against the release tag with `publish: true` and a typed confirmation phrase,
+through the `npm-publish` environment.
 
-1. **`create-flowcms` must not go to npm before `flowcms` does.** A generated
-   project carries a local copy of `flowcms` by decision (see
-   [`create-flowcms.md`](./create-flowcms.md)), but the scaffolder ships
-   documentation pointing theme authors at a package that would not yet exist.
-2. **The npm names.** Neither `flowcms` nor `create-flowcms` has been claimed on
-   the registry. `create-flowcms` is a requirement rather than a preference:
-   `npm create flowcms` resolves that literal name and no other. If `flowcms`
-   turns out to need a scope, `flowcms/theme` becomes `@scope/flowcms/theme`
-   everywhere — a rename with a blast radius, and cheapest to discover before
-   publication.
-3. **Release execution.** The publish guards are armed on purpose and are lifted
-   deliberately, in the commit that cuts the release.
+There is **no npm token anywhere in the workflow**. The npm CLI exchanges the
+job's GitHub OIDC identity for a short-lived, single-use credential — npm
+Trusted Publishing — which is also what signs the provenance attestation. npm
+binds that trust to this repository, this workflow filename and that
+environment, so moving publication elsewhere is refused by the registry itself
+rather than merely by policy written here.
+
+Both packages keep a `prepublishOnly` guard, permanently. Each validates the
+licence, the repository metadata and the built artifacts before npm sends
+anything, and refuses outright unless `FLOWCMS_RELEASE=1` — which only the
+publish job sets. A hand-run `npm publish` from a laptop still fails.
+`npm pack` is unaffected, so every proof above still runs.
+
+`@example/flowcms-theme-aurora` carries a guard of a different kind, alongside
+`"private": true`. The other two say *not without a real release*; Aurora's says
+*never* — it is an integration fixture and is not a package this project would
+publish under any circumstances.
+
+Two ordering rules outlive the first release:
+
+1. **`flowcms` publishes before `create-flowcms`.** Not because a generated
+   project needs it — it vendors its own copy, by decision (see
+   [`create-flowcms.md`](./create-flowcms.md)) — but because the scaffolder
+   ships documentation pointing theme authors at `flowcms`. The workflow
+   publishes them in that order and stops if the first fails.
+2. **npm versions are immutable.** The preflight refuses to republish a version
+   that already exists. The remedy for a bad release is a new version and an
+   `npm deprecate` notice on the bad one, never a republish.
 
 ## What future CI must run
 

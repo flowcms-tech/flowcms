@@ -3,12 +3,8 @@
 Creates a new [FlowCMS](https://github.com/) site: a complete, standalone
 application in a directory of your choosing.
 
-> **Not published yet.** The commands under *Planned* below do not work — this
-> package is not on npm and is exercised locally from a packed tarball. See
-> *Status* at the bottom.
-
 ```
-create-flowcms my-site
+npx create-flowcms@latest my-site
 ```
 
 That copies the FlowCMS application into `my-site/`, gives it its own package
@@ -118,10 +114,9 @@ and unit-tested, and only npm's path has been driven end to end.
 Support levels, the per-manager risks and the cross-platform notes are in
 `docs/distribution/package-managers.md` in the FlowCMS repository.
 
-## Planned
+## Invoking it
 
-Once FlowCMS is published these will be the normal ways in. **None of them work
-yet** — the package is not on npm.
+Every package manager's create shorthand works:
 
 ```
 npx create-flowcms@latest my-site
@@ -142,6 +137,11 @@ which are unavailable inside Next-compiled server code.
 
 ## Status
 
-The package is licensed `GPL-2.0-or-later`, but carries `"private": true` and a
-`prepublishOnly` guard that refuses to publish. Both come off together, in the
-commit that cuts the release — not before.
+Published on npm and licensed `GPL-2.0-or-later`. The current release is
+**0.1.1**.
+
+It still carries a `prepublishOnly` guard, and that is permanent rather than
+left over: it refuses unless `FLOWCMS_RELEASE=1`, which only the publish job in
+the repository's release workflow sets. A `npm publish` run by hand, from a
+laptop, with no release in progress still fails — while a real release passes
+every one of the guard's checks on the way through.

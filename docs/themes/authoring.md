@@ -8,13 +8,19 @@ Every code sample below is taken from a theme that is compiled and tested in
 this repository: `packages/flowcms-theme-aurora`. If a name here is wrong, that
 package stops compiling and `tests/themes/publicContract.test.ts` fails.
 
-> **`flowcms` is not on npm yet.** The package exists — it is built from
-> `src/Themes/contract` into `packages/flowcms` — so `npm install flowcms` does
-> not resolve and npm cannot auto-install it as a peer. Until it is published,
-> develop your theme against a FlowCMS checkout or a locally packed tarball,
-> exactly as section 16 describes. `@example/flowcms-theme-aurora` is not
-> published either; it is a fixture in this repository and the samples use it as
-> a stand-in for your own package name.
+> **`flowcms` is on npm.** Install it as a peer of your theme package:
+>
+> ```bash
+> npm install --save-peer flowcms
+> ```
+>
+> It is built from `src/Themes/contract` into `packages/flowcms`, and the
+> current release is **0.1.1**. Declare a `flowcmsCompat` range your theme
+> actually renders against — FlowCMS is 0.x, where a minor bump is a breaking
+> change by convention, so `^0.1.0` accepts `0.1.1` but not `0.2.0`.
+>
+> `@example/flowcms-theme-aurora` is **not** published: it is a fixture in this
+> repository, and the samples use it as a stand-in for your own package name.
 
 ---
 
@@ -433,9 +439,9 @@ Three explicit, reviewable edits. No upload, no ZIP, no runtime scan.
 npm install @example/flowcms-theme-aurora
 ```
 
-(Substitute your own package name. Neither this fixture nor `flowcms` itself is
-published yet, so today that install comes from a path or a packed tarball —
-section 16.)
+(Substitute your own package name. `flowcms` itself resolves from npm; this
+Aurora fixture does not — it is not published, so installing *it* means a path
+or a packed tarball, as section 16 describes.)
 
 **2. Register it** in `src/Themes/packages.ts`
 

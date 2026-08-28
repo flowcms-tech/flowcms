@@ -2,11 +2,12 @@
 
 The scaffolder that creates a new FlowCMS site.
 
-> **Not published.** `create-flowcms` exists in this repository
-> (`packages/create-flowcms`) and is not on npm: `npx create-flowcms` does not
-> resolve, and neither does `npm create flowcms`, `pnpm create flowcms`,
-> `yarn create flowcms` or `bun create flowcms`. See
-> [Project status](../../README.md#project-status).
+> **Published.** `create-flowcms` is on npm at **0.1.1**, so
+> `npx create-flowcms@latest my-site` resolves, and so do
+> `npm create flowcms@latest`, `pnpm create flowcms`, `yarn create flowcms` and
+> `bun create flowcms`. It is published from a release tag through npm Trusted
+> Publishing; the source of truth is `packages/create-flowcms` in this
+> repository. See [Project status](../../README.md#project-status).
 >
 > **On "verified".** The end-to-end proof — pack, install outside the
 > repository, scaffold, install, build — runs in CI and passes: the scaffolder
@@ -470,12 +471,14 @@ reason: the project would share a name with the package it depends on, and npm
 refuses to install a package under a package of the same name — which is why the
 repository root is not called `flowcms`.
 
-### `packages/flowcms`, before publication
+### `packages/flowcms`, vendored rather than resolved
 
 The generated project carries its **own copy** of the public theme API and
-depends on it as `"flowcms": "file:packages/flowcms"`. `flowcms` is not on npm,
-so a generated project cannot depend on a registry version — and must not depend
-on a path back into this repository.
+depends on it as `"flowcms": "file:packages/flowcms"`. It could now depend on
+the registry version — `flowcms` is published — and it deliberately does not:
+what it must never do is depend on a path back into this repository, and
+vendoring is what makes the generated project genuinely standalone rather than
+merely detached.
 
 `npm run build:packages` therefore builds the project's own copy, and
 `flowcms/theme` resolves through the project's `node_modules` with **no tsconfig

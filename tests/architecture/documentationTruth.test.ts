@@ -170,8 +170,14 @@ describe("no document describes create-flowcms as unbuilt", () => {
 describe("first-run setup documents the installer boundary", () => {
   const doc = read("docs/setup/first-run.md")
 
-  it("says create-flowcms is not published", () => {
-    expect(doc).toMatch(/not published/i)
+  it("names the scaffolder and what it writes", () => {
+    // This asserted the document contained the words "not published", which was
+    // true until 0.1.1 shipped and is now the opposite of true. The durable
+    // requirement was never the publication status: it is that the document
+    // says which tool writes the deployment configuration, so a reader knows
+    // what produced the `.env` they are being asked about.
+    expect(doc).toMatch(/create-flowcms/)
+    expect(doc.replace(/\s+/g, " ")).toMatch(/deployment configuration/i)
   })
 
   it("keeps the line the feature does not cross: the scaffolder creates no owner", () => {
@@ -210,20 +216,55 @@ describe("the previous project is described as removed, not present", () => {
   })
 })
 
-describe("no document claims something is published", () => {
-  // Both package names are unpublished AND unverified as available. A document
-  // that hands a reader `npx create-flowcms` as a working command is wrong
-  // today and would be wrong in a way that wastes their time.
-  //
-  // Only fenced COMMAND lines are checked. Prose discussing the future
-  // published form is how these documents explain themselves, and a rule that
-  // forbade the string outright would forbid saying it does not work.
-  //
+describe("no document presents an uninstallable package as installable", () => {
+  /**
+   * This forbade `npx create-flowcms` and `npm install flowcms` outright, on the
+   * grounds that both names were unpublished and unverified — a command that
+   * wastes a reader's afternoon. Both are published now, so the rule as written
+   * forbade the README from showing the one command it exists to show.
+   *
+   * The premise is re-anchored on evidence the repository actually carries: a
+   * dated version heading in the changelog means a release happened. Before the
+   * first one, no install instructions at all — the original rule, unchanged.
+   * After it, they are expected.
+   *
+   * The VERSION-PIN half of this question — that an instruction must not name a
+   * version this tree has not reached — belongs to
+   * `tests/release/releaseProcess.test.ts` and is deliberately not duplicated
+   * here. Two implementations of one rule is two answers to one question.
+   */
+  const released = /^## \[\d+\.\d+\.\d+\][^\n]*\d{4}-\d{2}-\d{2}/m.test(read("CHANGELOG.md"))
+
   it.each(DOCS)("%s", (file) => {
+    if (released) return
+
+    // Only fenced COMMAND lines are checked. Prose discussing the published
+    // form is how these documents explain themselves, and a rule that forbade
+    // the string outright would forbid saying it does not work.
     const offending = read(file)
       .split("\n")
       .filter((line) => /^\s*(?:\$\s*)?(?:npx create-flowcms|npm install flowcms\b)/.test(line))
     expect(offending, `${file} presents an unpublished package as installable`).toEqual([])
+  })
+
+  it("Aurora is still never presented as something to install from npm", () => {
+    // The one package here that genuinely is not published, and never will be:
+    // it carries `"private": true` and is an integration fixture. Any document
+    // showing it as an install must say where it actually comes from.
+    const aurora = JSON.parse(read("packages/flowcms-theme-aurora/package.json"))
+    expect(aurora.private, "Aurora is no longer private — this rule assumed it was").toBe(true)
+
+    for (const file of DOCS) {
+      const source = read(file)
+      const shown = source
+        .split("\n")
+        .some((line) => /^\s*(?:\$\s*)?npm install @example\/flowcms-theme-aurora/.test(line))
+      if (!shown) continue
+      expect(
+        /not published|is a fixture|packed tarball|from a path/i.test(source),
+        `${file} installs the Aurora fixture without saying it is not on npm`,
+      ).toBe(true)
+    }
   })
 })
 
