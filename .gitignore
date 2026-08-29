@@ -78,6 +78,17 @@ yarn-error.log*
 !.env.example
 !.env.*.example
 
+# The generated local Core development environment (scripts/dev/localEnv.mjs).
+#
+# ALREADY covered by `.env.*` above. Named anyway, and anchored, because this
+# one is written by a tool rather than by a person: a file nobody remembers
+# creating is a file nobody thinks to check before `git add -A`, and it holds
+# this machine's AUTH_SECRET, CAPTCHA_SECRET, FLOWCMS_SETUP_TOKEN and object
+# storage credentials. An explicit rule also survives somebody narrowing the
+# wildcard above, which is exactly the edit that would silently expose it.
+/.env.dev.local
+.env.dev.local
+
 # vercel
 .vercel
 

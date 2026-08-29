@@ -11,9 +11,53 @@ services:
     build:
       context: .
       target: builder
-    command: ["npm", "run", "dev"]
+    # MIGRATE, THEN START NEXT — and the indirection is not decoration.
+    #
+    # `Dockerfile` sets `ENTRYPOINT ["./docker/entrypoint.sh"]` in the `runner`
+    # stage and only there, so a container built from `builder` inherits the
+    # node base image's entrypoint instead and FlowCMS's migration step never
+    # runs. This overlay used to say `["npm", "run", "dev"]`, which meant a
+    # fresh `flowcms-data` volume started the dev server against a database with
+    # no tables in it: `SQLITE_ERROR: no such table: settings` on the first
+    # request, three layers away from the cause.
+    #
+    # `scripts/dev-container-start.mjs` is the development half of
+    # `docker/entrypoint.sh`. It applies migrations, refuses to start the server
+    # if they fail, and forwards signals so `down` does not wait out the kill
+    # timeout. Node rather than a shell script because this one is reached
+    # through the bind mount, where the executable bit and the line endings
+    # belong to the developer's host filesystem.
+    command: ["node", "scripts/dev-container-start.mjs"]
     environment:
       NODE_ENV: development
+      # HOT RELOAD ACROSS THE BIND MOUNT.
+      #
+      # The mount propagates CONTENT correctly and does NOT propagate filesystem
+      # events from a Windows host into the Linux container. So the watcher is
+      # never told anything changed: the container's own `grep` finds the edit
+      # while the browser keeps serving the old page, with no error to explain
+      # it.
+      #
+      # THE FIX IS THE BUNDLER, NOT THIS VARIABLE — read the next block. Turbopack
+      # was tested in BOTH watcher modes on Windows and detects the edit in
+      # neither, so `FLOWCMS_WATCH_POLL_MS` is left OFF by default: switching a
+      # Linux developer's working event watcher to polling would cost CPU, fill
+      # the log with "watch error … NotFound" lines, and fix nothing. It stays
+      # available because it is Next's documented knob and may help on a host
+      # not tested here. See `watchOptions` in next.config.ts.
+      FLOWCMS_WATCH_POLL_MS: ${FLOWCMS_WATCH_POLL_MS:-}
+      # The bundler the dev server runs, and the webpack watcher's polling flag.
+      #
+      # Empty means Next's own default, Turbopack. `npm run dev:docker` fills
+      # this in with `webpack` when it is started FROM a Windows host, because
+      # webpack's WATCHPACK_POLLING watcher is the one measured to work through
+      # that mount. Running this overlay by hand on Windows — plain
+      # `docker compose -f compose.yml -f compose.dev.yml up` — gets Turbopack
+      # and no hot reload unless you set this yourself.
+      #
+      # WATCHPACK_POLLING is read only by webpack and is inert under Turbopack.
+      FLOWCMS_DEV_BUNDLER: ${FLOWCMS_DEV_BUNDLER:-}
+      WATCHPACK_POLLING: ${WATCHPACK_POLLING:-true}
     volumes:
       - .:/app
       # Anonymous volumes masking the bind mount. Without these, the host's

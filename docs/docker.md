@@ -88,6 +88,16 @@ time (a build has no volume) and not lazily on first request (that hides
 failure behind a 500). If a migration fails the entrypoint exits non-zero and
 the container does not serve.
 
+The development overlay does the same thing by a different route, and the
+difference is worth knowing if you ever edit it. `ENTRYPOINT` is declared in the
+image's `runner` stage, but `compose.dev.yml` builds the earlier `builder`
+stage — so a development container never reaches `docker/entrypoint.sh` and has
+to migrate itself. That is what its `command:` does: `scripts/dev-container-start.mjs`
+applies migrations, refuses to start the server if they fail, and only then runs
+`next dev`. Replacing that command with a bare `next dev` reintroduces the
+failure it exists to prevent — a fresh volume serving `no such table: settings`
+on the first request.
+
 Data survives `docker compose restart`, `docker compose down`, and
 `docker compose up`. It is destroyed by `docker compose down -v`, which removes
 volumes — that is the only command that deletes your content.

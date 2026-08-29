@@ -31,6 +31,10 @@ data
 # the negation must follow the wildcard to survive it.
 .env
 .env.*
+# The generated local development environment. Covered by `.env.*`, named for
+# the same reason .gitignore names it: the builder stage runs `COPY . .`, so a
+# file that slipped past this list is baked into an image layer.
+.env.dev.local
 !.env.example
 data-info.txt
 *.pem
