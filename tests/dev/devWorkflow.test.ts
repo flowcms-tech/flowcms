@@ -76,14 +76,24 @@ describe("the development container migrates before it serves", () => {
     expect(containerStart).toMatch(/process\.exit\(migration\)/)
   })
 
-  it("the dev server command matches the root dev script", () => {
-    // Pinned in both directions so a change to one is a failing test rather
-    // than a container that quietly binds the wrong interface. `-H 0.0.0.0` is
-    // not cosmetic: Next binds loopback by default, and a server on 127.0.0.1
-    // inside a container is unreachable from the published port.
-    expect(scripts.dev).toBe("next dev -H 0.0.0.0")
+  it("the dev server command matches the root dev script, minus the port", () => {
+    // Pinned so a change to one is a failing test rather than a container that
+    // quietly binds the wrong interface. `-H 0.0.0.0` is not cosmetic: Next
+    // binds loopback by default, and a server on 127.0.0.1 inside a container
+    // is unreachable from the published port.
+    expect(scripts.dev.startsWith("next dev -H 0.0.0.0")).toBe(true)
     expect(containerStart).toContain('"dev", "-H", "0.0.0.0"')
     expect(containerStart).toContain("node_modules/next/dist/bin/next")
+  })
+
+  it("the container passes no port, so compose owns the mapping", () => {
+    // THE PORT IS WHERE THE TWO LEGITIMATELY DIVERGE. The root `dev` script may
+    // carry a host port — this repository pins 3010 because 3000 is taken on
+    // the maintainer's machine — but the container must keep binding 3000,
+    // because `compose.yml` publishes `${FLOWCMS_PORT:-3000}:3000`. A `-p` in
+    // here would move the listener out from under that mapping and the site
+    // would simply not answer.
+    expect(codeOnly(containerStart)).not.toMatch(/"-p"|--port/)
   })
 
   it("forwards signals so a stop does not wait out the kill timeout", () => {

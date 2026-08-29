@@ -115,8 +115,19 @@ project to make a Core change; you do need to before releasing one.
 npm install                # or: bun install
 cp .env.example .env.local # fill in AUTH_SECRET and CAPTCHA_SECRET
 npm run db:migrate         # creates the SQLite database at data/app.db
-npm run dev
+npm run dev                # http://localhost:3010
 ```
+
+**This serves on 3010, not Next's usual 3000.** Port 3000 is occupied often
+enough on maintainer machines that the `dev` script pins a free one rather than
+failing to bind. It is this repository's script only — `create-flowcms` rewrites
+it back to Next's default, so a generated site's `npm run dev` is on 3000 as
+every Next tutorial says. Override with `PORT=3000 npm run dev`, or edit the
+script; if you change it, set `NEXT_PUBLIC_BASE_URL` in `.env.local` to match, or
+canonicals and OG tags will point at the wrong port.
+
+The Docker workflow above is unaffected and independent: the container always
+binds 3000 internally and `compose.yml` publishes it on `${FLOWCMS_PORT:-3000}`.
 
 Then create the first owner account. Either open the site — it redirects to
 `/setup` while the installation is uninitialized, and needs

@@ -17,7 +17,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "next dev -H 0.0.0.0",
+    "dev": "next dev -H 0.0.0.0 -p 3010",
     "dev:docker": "node scripts/dev/up.mjs",
     "dev:docker:build": "node scripts/dev/up.mjs --build",
     "dev:reset": "node scripts/dev/reset.mjs",

@@ -252,4 +252,16 @@ export const DROPPED_DEV_DEPENDENCIES = {
 /** Scripts whose command changes because part of it referenced a fixture. */
 export const REWRITTEN_SCRIPTS = {
   "build:packages": "node scripts/build-package.mjs",
+  // A GENERATED SITE GETS NEXT'S DEFAULT PORT, not this repository's.
+  //
+  // The root script pins 3010 because port 3000 is occupied on the maintainer's
+  // machine — a local circumstance, and one a stranger's project has no reason
+  // to inherit. Their `npm run dev` should behave the way every Next tutorial
+  // says it does, and their compose stack already exposes FLOWCMS_PORT for the
+  // case where 3000 is taken.
+  //
+  // The container is unaffected either way: `scripts/dev-container-start.mjs`
+  // passes no port at all, so Next binds 3000 inside the container and
+  // `compose.yml` publishes it on FLOWCMS_PORT.
+  dev: "next dev -H 0.0.0.0",
 }
