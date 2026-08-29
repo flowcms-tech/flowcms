@@ -8,12 +8,126 @@ change merged.
 
 ## Getting set up
 
+Two ways to run the Core. **The Docker workflow is the recommended one** — it is
+the same image, entrypoint, storage and database topology an operator gets, so a
+change that works there works where it ships.
+
+### Docker (recommended)
+
+```bash
+npm run dev:docker
+```
+
+That is the whole first run. It generates every credential a working
+installation needs, applies database migrations, starts Next in development mode
+against the bind-mounted source, and prints something like:
+
+```
+FlowCMS — local Core development
+
+  Site         http://localhost:3000
+  First run    http://localhost:3000/setup
+  Admin        http://localhost:3000/admin
+
+  Setup token  Xb7q…
+```
+
+Open `/setup`, paste the printed token into the **Setup authorization** field,
+and create the first owner by hand. Nothing seeds an account and nothing
+pre-fills the token: the point of this environment is to walk the real first-run
+flow, and `FLOWCMS_SETUP_TOKEN` is enforced here exactly as it is in production.
+
+Then edit source normally — the repository is bind-mounted, so React, Next,
+`Framework/` and `Modules/` changes hot reload without a rebuild.
+
+> **Hot reload on Windows uses webpack, not Turbopack.** Turbopack's file
+> watcher does not see changes through a Windows bind mount — not with
+> filesystem events (they never cross) and not with polling
+> (`watchOptions.pollIntervalMs` reaches Turbopack and edits still go
+> undetected). Nothing reports an error; the container's own `grep` finds your
+> edit while the browser keeps serving the old page. `dev:docker` therefore
+> starts the dev server with `--webpack` and `WATCHPACK_POLLING` **on Windows
+> hosts only** — Linux shares a kernel with the container and its events work,
+> so it keeps Next's default. Override either way with
+> `FLOWCMS_DEV_BUNDLER=turbopack` or `=webpack`. Native `npm run dev` on the
+> host always uses Turbopack, and so does every production build.
+
+| Command | What it does |
+|---|---|
+| `npm run dev:docker` | Everyday start. Builds only if the image is missing. Preserves your database. |
+| `npm run dev:docker:build` | Same, forcing an image rebuild. Needed after a dependency, lockfile or `Dockerfile` change. |
+| `npm run dev:reset` | Deletes the local database so `/setup` is a fresh installation again. |
+
+**Where everything lives.** Source is the only thing bind-mounted; all runtime
+state is in Docker named volumes, outside the working tree.
+
+| What | Where | `dev:reset` |
+|---|---|---|
+| SQLite database, owner accounts, all CMS content | volume `flowcms-data`, at `/data/app.db` | **deleted** |
+| Uploaded media (Garage object data) | volume `garage-data` | preserved |
+| Garage cluster metadata | volume `garage-meta` | preserved |
+| Container `node_modules` and `.next` | anonymous volumes on the `app` container | preserved |
+| Generated local credentials | `.env.dev.local` (gitignored) | preserved |
+| Source | bind mount of the repository at `/app` | untouched |
+
+`dev:reset` **stops** the `app` container, deletes `/data/app.db` and its
+write-ahead log from inside the volume, and stops there. It deletes the database
+file rather than the volume, and stops the container rather than removing it,
+for a measured reason: removing the container discards the anonymous volume
+masking `/app/node_modules`, which Docker then re-seeds from the image — 1.3 GB
+across 647 packages, minutes of copying on every reset. It never runs
+`docker compose down`, so Garage keeps running and uploaded test media survives,
+and the setup token does not change.
+
+The `-wal` and `-shm` sidecars go with the database on purpose. SQLite in WAL
+mode keeps committed transactions in `app.db-wal` until a checkpoint, so
+deleting only `app.db` can resurrect yesterday's owner account into the "fresh"
+installation.
+
+**`.env.dev.local`** is written by `scripts/dev/localEnv.mjs` on the first run
+and reused after that — secrets do not rotate on restart. It holds `AUTH_SECRET`,
+`CAPTCHA_SECRET`, `FLOWCMS_SETUP_TOKEN`, `PREVIEW_SECRET` and the two Garage
+credentials, all 32 cryptographically random bytes, all satisfying the real
+`Framework/Config/deploymentSecret.ts` rules — **there is no development bypass
+of the secret policy, and none may be added.** It is ignored by both
+`.gitignore` and `.dockerignore` under an explicit, anchored rule.
+
+It only ever *fills gaps*: a value already in your shell or your `.env` wins and
+is never overwritten. If a value you configured yourself is too weak, the
+command refuses and names the rule rather than silently replacing it.
+
+**This is not the installer test.** `npm run dev:docker` develops the Core.
+Validating what an end user actually installs — the tarball allowlist, the
+template strip sentinels, `npm ci` behaviour in a generated project — still
+requires packing and scaffolding for real:
+
+```bash
+npm run build:template
+cd packages/create-flowcms && npm pack
+```
+
+Those two workflows are deliberately separate. You do **not** need to scaffold a
+project to make a Core change; you do need to before releasing one.
+
+### Plain Node on the host
+
 ```bash
 npm install                # or: bun install
 cp .env.example .env.local # fill in AUTH_SECRET and CAPTCHA_SECRET
 npm run db:migrate         # creates the SQLite database at data/app.db
-npm run dev
+npm run dev                # http://localhost:3010
 ```
+
+**This serves on 3010, not Next's usual 3000.** Port 3000 is occupied often
+enough on maintainer machines that the `dev` script pins a free one rather than
+failing to bind. It is this repository's script only — `create-flowcms` rewrites
+it back to Next's default, so a generated site's `npm run dev` is on 3000 as
+every Next tutorial says. Override with `PORT=3000 npm run dev`, or edit the
+script; if you change it, set `NEXT_PUBLIC_BASE_URL` in `.env.local` to match, or
+canonicals and OG tags will point at the wrong port.
+
+The Docker workflow above is unaffected and independent: the container always
+binds 3000 internally and `compose.yml` publishes it on `${FLOWCMS_PORT:-3000}`.
 
 Then create the first owner account. Either open the site — it redirects to
 `/setup` while the installation is uninitialized, and needs

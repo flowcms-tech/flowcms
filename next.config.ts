@@ -16,6 +16,34 @@ const nextConfig: NextConfig = {
     .map((origin) => origin.trim())
     .filter(Boolean),
   /**
+   * Poll for source changes instead of waiting for filesystem events.
+   *
+   * FOR A SOURCE TREE BIND-MOUNTED INTO A CONTAINER FROM ANOTHER KERNEL, where
+   * a host's file changes reach the container's filesystem correctly but its
+   * filesystem EVENTS do not cross the mount, leaving the watcher untold.
+   *
+   * WHAT THIS DOES NOT FIX, stated plainly because the obvious assumption is
+   * wrong: it does not rescue Turbopack on a Windows host. The value does reach
+   * Turbopack — Next passes it into its `watch` options, and the poll watcher's
+   * characteristic "watch error … NotFound" lines prove it runs — and edits are
+   * still not detected. That case is handled by running the dev server on
+   * webpack instead; see `scripts/dev/bundler.mjs`.
+   *
+   * Env-driven and unset by default, like `allowedDevOrigins` above. Polling is
+   * wasted CPU wherever events already work, which is a native `next dev` and a
+   * Linux host's bind mount alike. It stays available because it is Next's
+   * documented mechanism and may help on a host not tested here.
+   *
+   * Development only by construction — Next reads `watchOptions` only when
+   * running the dev server, so this cannot affect a production build.
+   */
+  ...(() => {
+    const interval = Number(process.env.FLOWCMS_WATCH_POLL_MS ?? "")
+    return Number.isFinite(interval) && interval > 0
+      ? { watchOptions: { pollIntervalMs: interval } }
+      : {}
+  })(),
+  /**
    * Emits `.next/standalone` — a self-contained `server.js` plus a pruned
    * `node_modules` — which is what the Docker runner stage ships.
    *

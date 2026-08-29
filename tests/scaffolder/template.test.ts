@@ -318,13 +318,35 @@ describe("the template ships no script nothing runs", () => {
     return parts.join("/")
   }
 
+  /**
+   * The Compose files a generated project ships.
+   *
+   * A FOURTH EXECUTION SURFACE, added when `compose.dev.yml` grew a `command:`.
+   * The development overlay builds the `builder` stage, which carries no
+   * ENTRYPOINT — `Dockerfile` declares one only in `runner` — so the overlay
+   * names `scripts/dev-container-start.mjs` directly to migrate before serving.
+   * That script is genuinely reachable in a generated project, and a
+   * reachability check that only knew about package.json, the Dockerfile and
+   * the entrypoint would call it an orphan and demand it be excluded — which
+   * would ship a `command:` pointing at a file that is not there.
+   */
+  const COMPOSE_FILES = [
+    "compose.yml",
+    "compose.dev.yml",
+    "compose.external-s3.yml",
+    "compose.postgres.yml",
+    "compose.mysql.yml",
+    "compose.mariadb.yml",
+  ]
+
   function reachable(): Set<string> {
-    // The three surfaces a generated project executes. Anything absent from the
+    // The surfaces a generated project executes. Anything absent from the
     // template contributes nothing, which is why each is guarded.
     const roots = [
       JSON.stringify(JSON.parse(read("package.json")).scripts ?? {}),
       has("Dockerfile") ? read("Dockerfile") : "",
       has("docker/entrypoint.sh") ? read("docker/entrypoint.sh") : "",
+      ...COMPOSE_FILES.map((file) => (has(file) ? read(file) : "")),
     ].join("\n")
 
     // Unanchored on purpose: a Dockerfile writes `/app/scripts/migrate.mjs` and

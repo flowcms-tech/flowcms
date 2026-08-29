@@ -148,6 +148,23 @@ export const EXCLUDE = [
   "scripts/release-proof.mjs",
   "scripts/release-version-sync.mjs",
 
+  // THE LOCAL CORE DEVELOPMENT WORKFLOW — this repository only.
+  //
+  // `scripts/dev/` orchestrates `dev:docker` and `dev:reset` from the HOST: it
+  // generates a developer's local secrets, resolves this project's Docker
+  // volumes and resets the database between first-run tests. Every one of those
+  // is an activity of developing FlowCMS itself. A generated project is a site,
+  // not a fork — its operator gets a real `.env` written by create-flowcms and
+  // has no reason to regenerate one, and a `dev:reset` shipped to somebody's
+  // actual installation is a command that deletes their content.
+  //
+  // `scripts/dev-container-start.mjs` is NOT excluded and must not be: it is
+  // the `command:` in `compose.dev.yml`, which every generated project DOES
+  // ship, and it carries the migrate-before-serve fix into those projects too.
+  // The prefix rule here matches `scripts/dev/` only — `scripts/dev` is not a
+  // prefix of `scripts/dev-container-start.mjs` under `entry + separator`.
+  "scripts/dev",
+
   "docker/storage-roundtrip.test.ts",
   "docker/storage-persistence.test.ts",
 
@@ -202,6 +219,13 @@ export const GENERATED = ["README.md"]
 export const DROPPED_SCRIPTS = {
   test: "the suite asserts against this repository's own fixtures and packaging",
   "test:watch": "same",
+  // The host half of the Core development workflow — see `scripts/dev` in
+  // EXCLUDE. The container half (`scripts/dev-container-start.mjs`) ships, so
+  // `docker compose -f compose.yml -f compose.dev.yml up` still migrates before
+  // it serves in a generated project; only the convenience wrapper is dropped.
+  "dev:docker": "local Core development tooling; scripts/dev is not shipped",
+  "dev:docker:build": "same",
+  "dev:reset": "same — and a reset command that deletes a live site's database has no business in one",
   "db:seed": "development sample data; src/db/seed.ts is not shipped",
   "build:example-theme": "the example theme is not shipped",
   "build:template": "it builds create-flowcms's own template; the script is not shipped",
@@ -228,4 +252,16 @@ export const DROPPED_DEV_DEPENDENCIES = {
 /** Scripts whose command changes because part of it referenced a fixture. */
 export const REWRITTEN_SCRIPTS = {
   "build:packages": "node scripts/build-package.mjs",
+  // A GENERATED SITE GETS NEXT'S DEFAULT PORT, not this repository's.
+  //
+  // The root script pins 3010 because port 3000 is occupied on the maintainer's
+  // machine — a local circumstance, and one a stranger's project has no reason
+  // to inherit. Their `npm run dev` should behave the way every Next tutorial
+  // says it does, and their compose stack already exposes FLOWCMS_PORT for the
+  // case where 3000 is taken.
+  //
+  // The container is unaffected either way: `scripts/dev-container-start.mjs`
+  // passes no port at all, so Next binds 3000 inside the container and
+  // `compose.yml` publishes it on FLOWCMS_PORT.
+  dev: "next dev -H 0.0.0.0",
 }
