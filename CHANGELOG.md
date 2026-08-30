@@ -7,7 +7,35 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **The login CAPTCHA drew no security code, so nobody could sign in to the
+  admin panel.** `/api/captcha` asked for `bold 26px sans-serif`, and
+  `sans-serif` is not a font — it is a request that the host resolve one. The
+  runtime image is `node:22-bookworm-slim`, which ships no fonts at all: no
+  `/usr/share/fonts`, no fontconfig. `@napi-rs/canvas` matched nothing,
+  `measureText()` returned width 0, and `fillText()` drew zero pixels.
+
+  It failed in the way least likely to be noticed. The captcha's background and
+  its noise lines are geometry rather than glyphs, so they rendered perfectly —
+  the login page showed a normal-looking captcha box containing a faint squiggle
+  and no code. The response was a 200, the PNG was valid, and the cookie carried
+  a correctly signed challenge. Every part of the CAPTCHA worked except the part
+  a human has to read.
+
+  The application now carries its own font. Geist Mono Bold (SIL Open Font
+  License 1.1, already a pinned dependency) is committed under
+  `src/Framework/Captcha/fonts/` and registered under a private family name, so
+  the image renders identically on a fontless container, on a contributor's
+  laptop, and on whatever base image a self-hoster picks. The runtime image also
+  installs `fonts-dejavu-core`, which gives the generic families a real answer
+  for anything else that renders text.
+
+  Note that no configuration check could have caught this. `CAPTCHA_SECRET` was
+  set and valid, so startup validation, readiness, the route's own 503 guard and
+  the first-run prerequisites all correctly reported a healthy deployment. They
+  ask whether a challenge can be *signed*; whether it can be *seen* is a
+  different question.
 
 ## [0.1.1] — 2026-08-27
 
