@@ -7,8 +7,10 @@ import ElementInput from "@/components/shared/ElementInput/ElementInput"
 import ElementButton from "@/components/shared/ElementButton/ElementButton"
 import ValidationBox from "@/components/shared/Validations/ValidationBox"
 import { setupSchema, type SetupFormValues } from "./Values/Validations"
-import PrerequisiteList, { type PrerequisiteState } from "./Components/PrerequisiteList"
+import { type PrerequisiteState } from "./Components/PrerequisiteList"
 import SetupComplete from "./Components/SetupComplete"
+import GeneratePassword from "./Components/GeneratePassword"
+import { MIN_OWNER_PASSWORD_LENGTH } from "@/Framework/Setup/ownerRules"
 
 /**
  * The first-run setup form.
@@ -116,8 +118,6 @@ export default function SetupModule({
         </p>
       </div>
 
-      <PrerequisiteList database={database} storage={storage} captcha={captcha} auth={auth} />
-
       {blocked ? (
         <div
           role="status"
@@ -136,34 +136,42 @@ export default function SetupModule({
             <ValidationBox messages={serverErrors} />
 
             <fieldset className="flex flex-col gap-4">
-              <legend className="mb-2 text-sm font-semibold text-foreground">Site</legend>
               <ElementInput
                 name="siteName"
-                label="Site name"
+                label="Site Title"
                 placeholder="Your site's name"
+                hint="The name of your site. Shown in the browser tab, in search results and link previews, and in your theme's header and footer."
                 autoComplete="organization"
                 required
               />
+              {/*
+                LABELLED "Description", stored as `tagline`. The field key is
+                the schema's, the API's and the database column's, and renaming
+                those to follow a label would be a migration in service of a
+                word. What the operator reads and what the column is called are
+                allowed to differ; this is the place to absorb that.
+              */}
               <ElementInput
                 name="tagline"
-                label="Tagline"
-                placeholder="Optional short description"
+                label="Description"
+                placeholder="What this site is, in one line"
+                hint="A one-line summary of your site. Used as the default description for search engines, link previews and your RSS feed. Leave it empty to omit it entirely."
                 autoComplete="off"
               />
             </fieldset>
 
             <fieldset className="flex flex-col gap-4">
-              <legend className="mb-2 text-sm font-semibold text-foreground">Owner</legend>
               <ElementInput
                 name="ownerName"
                 label="Name"
-                placeholder="Optional"
+                required
+                placeholder="Your owner name"
                 autoComplete="name"
               />
               <ElementInput
                 name="ownerEmail"
                 type="email"
-                label="Email"
+                label="Owner Email"
                 placeholder="you@example.com"
                 autoComplete="username"
                 required
@@ -172,8 +180,12 @@ export default function SetupModule({
                 name="ownerPassword"
                 type="password"
                 label="Password"
-                placeholder="At least 12 characters"
+                // DERIVED, not written out. The previous literal said "At least
+                // 12 characters" and was a separate copy of a rule that lives
+                // in ownerRules — the kind that stays behind when the rule moves.
+                placeholder={`At least ${MIN_OWNER_PASSWORD_LENGTH} characters`}
                 autoComplete="new-password"
+                endContent={<GeneratePassword />}
                 required
               />
               <ElementInput
@@ -183,17 +195,24 @@ export default function SetupModule({
                 autoComplete="new-password"
                 required
               />
+
             </fieldset>
 
             <fieldset className="flex flex-col gap-4">
-              <legend className="mb-2 text-sm font-semibold text-foreground">
-                Setup authorization
-              </legend>
               <ElementInput
                 name="setupToken"
                 type="password"
                 label="Setup token"
                 placeholder="From your deployment configuration"
+                // WHERE THE VALUE IS, never the value itself. This page is
+                // served before anyone has authenticated, so it can describe
+                // the token's location and must never approach its content.
+                //
+                // Deliberately not branched on environment. The server knows
+                // whether it is a development install and could tailor this
+                // line, but that would mean shipping deployment facts to a
+                // pre-auth page to save a reader one clause.
+                hint="Look for FLOWCMS_SETUP_TOKEN in your project's .env file, or in the terminal output from when you installed or started FlowCMS."
                 // `off`, not `new-password`: this is a deployment secret shared
                 // by everyone who administers the server, not a credential
                 // belonging to the person at the keyboard. A password manager

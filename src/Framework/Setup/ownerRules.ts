@@ -19,8 +19,21 @@
  * runtime behind it.
  */
 
-/** Matches `MIN_PASSWORD_LENGTH` in scripts/bootstrap-owner.mjs, pinned by a test. */
-export const MIN_OWNER_PASSWORD_LENGTH = 12
+/**
+ * Matches `MIN_PASSWORD_LENGTH` in scripts/bootstrap-owner.mjs, pinned by a test.
+ *
+ * SIX, matching `Modules/AdminUsers/Values/Validations.ts`. It was twelve, which
+ * made the first owner the only account in the product held to a stricter rule
+ * than every admin created afterwards — a floor that a second user could walk
+ * under an hour later is a floor in name only.
+ *
+ * LENGTH IS THE ONLY RULE. There is deliberately no uppercase/digit/symbol
+ * requirement: composition rules push people toward predictable substitutions
+ * and away from length, which is the property that actually costs an attacker
+ * anything. The setup form offers to generate a strong password instead, which
+ * is the part that raises the floor in practice.
+ */
+export const MIN_OWNER_PASSWORD_LENGTH = 6
 
 /**
  * bcrypt silently truncates past 72 bytes, so a longer value would create a

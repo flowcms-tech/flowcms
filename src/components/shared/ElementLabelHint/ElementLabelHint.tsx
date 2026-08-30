@@ -52,6 +52,17 @@ export default function ElementLabelHint({
         <TooltipTrigger asChild>
           <button
             type="button"
+            // OUT OF THE TAB ORDER, like the eye and clear buttons in
+            // ElementInput. The icon sits in the label row, so it precedes its
+            // own input in the DOM: left focusable, tabbing through a form
+            // stops on the hint BEFORE the field it describes, and a form with
+            // three hints costs three extra keystrokes to fill in.
+            //
+            // Nothing becomes unreachable. The text is duplicated into the
+            // sr-only span above, and every field points aria-describedby at
+            // it, so focusing the INPUT already announces the hint — the
+            // tooltip is the sighted redundancy, not the source.
+            tabIndex={-1}
             aria-label="More information"
             onClick={() => setIsOpen((open) => !open)}
             className={cn(

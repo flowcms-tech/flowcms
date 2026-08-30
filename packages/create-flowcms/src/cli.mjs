@@ -272,9 +272,26 @@ function verboseRun(io) {
  * somebody runs an npm command in a pnpm project. The commands shown are the
  * ones this project actually uses.
  *
- * NO SECRET APPEARS HERE. The setup token is referenced by name and by where
- * to find it — a terminal scrolls into a screenshot, a screen share and a
- * support ticket, and a token pasted into one of those has to be rotated.
+ * THE SETUP TOKEN IS PRINTED HERE, in full. This reverses the original rule
+ * deliberately, and the reasoning it overrides is worth stating rather than
+ * deleting: a terminal scrolls into a screenshot, a screen share and a support
+ * ticket, and a token that lands in one of those has to be rotated.
+ *
+ * What bought the trade: the operator is two commands from a running install
+ * and one unanswerable question from being stuck, and "it is in .env" is a
+ * lookup they have to perform while holding the rest of these steps in their
+ * head. The token authorizes exactly one action, once — after setup completes
+ * the endpoint is gone and the value is inert — so its exposure window is the
+ * minutes between this line and the form.
+ *
+ * The blast radius is bounded ON PURPOSE and must stay that way:
+ *
+ *   - This is TERMINAL OUTPUT ONLY. The generated README still names the
+ *     variable without printing it (see render/readme.mjs), because a README
+ *     is a file that gets committed and a terminal is not.
+ *   - No OTHER secret is printed. AUTH_SECRET, CAPTCHA_SECRET and
+ *     PREVIEW_SECRET stay out of here: they are long-lived, they never expire
+ *     the way this one does, and nothing about first-run needs them visible.
  */
 function report(io, reporter, path, config, { installed }) {
   const where = relative(process.cwd(), path) || "."
@@ -320,7 +337,9 @@ function report(io, reporter, path, config, { installed }) {
   lines.push("")
   lines.push("Then create the first owner:")
   lines.push(`  1. Open ${config.baseUrl}/setup`)
-  lines.push("  2. It asks for a setup token — yours is FLOWCMS_SETUP_TOKEN in .env")
+  lines.push("  2. It asks for a setup token. Yours is:")
+  lines.push(`       ${config.secrets.setupToken}`)
+  lines.push("     Stored as FLOWCMS_SETUP_TOKEN in .env if you need it again.")
   lines.push("  3. Create the owner account and the site identity")
   lines.push(`  4. Sign in at ${config.baseUrl}${config.adminPath}/login`)
   lines.push("")
