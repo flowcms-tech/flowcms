@@ -8,9 +8,11 @@ import {
   signCaptcha,
 } from "@/Framework/Captcha/captcha"
 import { getCaptchaConfig, logCaptchaConfigProblem } from "@/Framework/Captcha/captchaConfig"
+import { captchaFontSpec } from "@/Framework/Captcha/captchaFont"
 
 const WIDTH = 140
 const HEIGHT = 44
+const FONT_SIZE = 26
 
 export async function GET() {
   /**
@@ -58,7 +60,12 @@ export async function GET() {
     ctx.stroke()
   }
 
-  ctx.font = "bold 26px sans-serif"
+  // The bundled font, NOT a generic family. `sans-serif` asks the host to
+  // resolve a font, and the runtime image has none — which drew the code with
+  // zero pixels while the background and noise lines rendered normally, so the
+  // login page showed an empty captcha box that nobody could answer. See
+  // `Framework/Captcha/captchaFont.ts`.
+  ctx.font = captchaFontSpec(FONT_SIZE)
   ctx.textBaseline = "middle"
 
   const charWidth = WIDTH / (code.length + 1)

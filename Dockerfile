@@ -111,6 +111,27 @@ RUN node scripts/collect-db-drivers.mjs /drivers
 FROM base AS runner
 WORKDIR /app
 
+# A system font, because this image had NONE.
+#
+# `node:22-bookworm-slim` ships without `/usr/share/fonts` and without
+# fontconfig. The login CAPTCHA asked for `sans-serif`, @napi-rs/canvas matched
+# nothing, and `fillText` drew zero pixels — while the background and noise
+# lines, being geometry rather than glyphs, rendered perfectly. The result was a
+# captcha box containing a squiggle and no code: a 200, a valid PNG, a correctly
+# signed cookie, and an admin panel nobody could sign in to.
+#
+# The application now carries its own font (see Framework/Captcha/captchaFont.ts
+# and the COPY below), which is what actually fixes the CAPTCHA. This package is
+# the second half of the belt-and-braces: it gives the generic families a real
+# answer, so anything else in the image that renders text — now or later — is
+# not one `sans-serif` away from silently drawing nothing.
+#
+# `fonts-dejavu-core` rather than a full font set: ~1.5 MB, and it is the
+# conventional minimal choice for exactly this.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends fonts-dejavu-core fontconfig \
+ && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
@@ -139,6 +160,12 @@ COPY --from=builder --chown=flowcms:flowcms /app/public ./public
 # the migrator is used only by the entrypoint. drizzle-orm has zero runtime
 # dependencies, so copying the single directory is complete.
 COPY --from=builder --chown=flowcms:flowcms /app/src/db/migrations ./src/db/migrations
+# The CAPTCHA's font, for the same reason as the migration SQL above: it is read
+# from disk at runtime by path, so no traced import points at it and Next's file
+# tracer leaves it out of the standalone bundle. `captchaFont.ts` resolves it
+# from the working directory, which is this WORKDIR — so the layout on the left
+# and the path in that module have to stay in step.
+COPY --from=builder --chown=flowcms:flowcms /app/src/Framework/Captcha/fonts ./src/Framework/Captcha/fonts
 COPY --from=builder --chown=flowcms:flowcms /app/node_modules/drizzle-orm ./node_modules/drizzle-orm
 # PostgreSQL and MySQL/MariaDB drivers plus their dependency closure, computed
 # from the lockfile at build time rather than hardcoded.

@@ -218,6 +218,69 @@ jobs:
             *) echo "ok    readiness leaked no connection detail" ;;
           esac
 
+      # THE CAPTCHA RENDERS A CODE A HUMAN COULD READ.
+      #
+      # Asserted HERE, in the image, because nowhere else can. The unit tests
+      # run on a GitHub runner, which has system fonts, so they draw glyphs
+      # whether or not the application carries its own font — they pass on a
+      # host that would have masked the bug entirely. The runtime image has no
+      # fonts unless the Dockerfile puts them there, and that is the only place
+      # the question is real.
+      #
+      # The bug this replaces: `ctx.font = "bold 26px sans-serif"` in a base
+      # image with no `/usr/share/fonts` matched nothing, so `fillText` drew
+      # ZERO pixels. The background and the noise lines are geometry rather than
+      # glyphs and rendered normally, so the endpoint returned 200 with a valid
+      # PNG and a correctly signed cookie — for an image with no code in it.
+      # Nobody could sign in, and every health, readiness and configuration
+      # check said the deployment was fine.
+      #
+      # So this counts INK, not status codes. A 200 was never the problem.
+      - name: The login CAPTCHA renders a readable code
+        run: |
+          set -e
+          curl -fsS --max-time 5 http://localhost:3000/api/captcha --output /tmp/captcha.png
+          file /tmp/captcha.png
+
+          # Count the dark pixels. Both the glyph colours and the six noise
+          # lines are randomised per request, so the threshold was measured
+          # rather than guessed: over 300 renders of each in this very image,
+          # a fontless render (background + noise only, which is exactly what
+          # the bug produced) covered 3-231 pixels, and a correct one covered
+          # 630-958. 400 is the gap between them.
+          #
+          # 231 is the number that matters. An earlier draft of this check used
+          # 150, which the NOISE LINES ALONE clear often enough to have waved a
+          # completely blank captcha through — a gate that fails open at random
+          # is worse than no gate, because it is also believed.
+          # `--entrypoint node` because the image's ENTRYPOINT is
+          # docker/entrypoint.sh, which ignores its arguments and unconditionally
+          # migrates and starts the server — passing a script as the command
+          # would boot a second server rather than run it.
+          ink="$(docker run --rm --volume /tmp/captcha.png:/captcha.png:ro \
+            --entrypoint node "$IMAGE" \
+            -e "
+              const { createCanvas, loadImage } = require('@napi-rs/canvas')
+              loadImage('/captcha.png').then((img) => {
+                const c = createCanvas(img.width, img.height)
+                const ctx = c.getContext('2d')
+                ctx.drawImage(img, 0, 0)
+                const { data } = ctx.getImageData(0, 0, img.width, img.height)
+                let ink = 0
+                for (let i = 0; i < data.length; i += 4) {
+                  if (data[i] < 200 && data[i + 1] < 200 && data[i + 2] < 200) ink++
+                }
+                console.log(ink)
+              })
+            ")"
+
+          echo "dark pixels in the captcha: $ink"
+          if [ "$ink" -lt 400 ]; then
+            echo "::error::the captcha rendered no readable code ($ink dark pixels) — the image is missing its font"
+            exit 1
+          fi
+          echo "ok    the captcha drew a code ($ink dark pixels)"
+
       - name: Migrations ran at container start
         run: |
           if docker logs "$CONTAINER" 2>&1 | grep -q "Migrations applied"; then
