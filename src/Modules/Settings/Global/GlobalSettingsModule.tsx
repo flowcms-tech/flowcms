@@ -84,14 +84,15 @@ export default function GlobalSettingsModule() {
               <div className="w-full grid grid-cols-2 items-start gap-4">
                 <ElementInput
                   name="siteName"
-                  label="Site Name"
+                  label="Site Title"
                   placeholder="FlowCMS"
                   hint="Shown in the browser tab, search results, and social shares — this is the one place it's set for the whole site."
                 />
+                {/* Labelled to match /setup. The key stays `tagline`. */}
                 <ElementInput
                   name="tagline"
-                  label="Tagline"
-                  placeholder="Security. Access. Peace of Mind."
+                  label="Description"
+                  placeholder="What this site is, in one line"
                   hint="A short description used as a fallback wherever a page doesn't set its own."
                 />
               </div>

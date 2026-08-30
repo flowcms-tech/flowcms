@@ -28,7 +28,7 @@ import { resolveConfig, redactDatabaseUrl } from "./migrate.mjs"
  */
 
 const BCRYPT_COST = 12 // must match src/Framework/Auth/password.ts
-const MIN_PASSWORD_LENGTH = 12
+const MIN_PASSWORD_LENGTH = 6 // must match MIN_OWNER_PASSWORD_LENGTH in src/Framework/Setup/ownerRules.ts
 
 /** Deliberately the same normalisation as src/Framework/Auth/identity.ts.
  *  Email identity must not depend on which engine stores it. */

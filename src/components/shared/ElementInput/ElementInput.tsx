@@ -31,6 +31,7 @@ interface ElementInputClassNames {
   eyeButton?: string;
   error?: string;
   hint?: string;
+  description?: string;
 }
 
 interface ElementInputProps {
@@ -41,6 +42,15 @@ interface ElementInputProps {
   disabled?: boolean;
   classNames?: ElementInputClassNames;
   hint?: string;
+  /**
+   * Persistent guidance rendered under the field, always visible.
+   *
+   * Distinct from `hint`, which hides the same kind of text behind a tooltip.
+   * Use this when the field cannot be answered from the label alone and the
+   * person filling it in may have nowhere else to look — a tooltip is a fine
+   * place for a reminder and the wrong place for a prerequisite.
+   */
+  description?: string;
   required?: boolean;
   defaultValue?: string;
   errorVariant?: ErrorVariant;
@@ -69,6 +79,7 @@ export default function ElementInput({
   disabled = false,
   classNames = {},
   hint,
+  description,
   required = false,
   defaultValue = "",
   errorVariant = "default",
@@ -113,6 +124,17 @@ export default function ElementInput({
           : type === "number" ? "numeric"
           : undefined;
 
+        // The description is announced ALONGSIDE the error rather than being
+        // replaced by it: it says where the value comes from, which is exactly
+        // what someone needs after getting the value wrong.
+        const describedBy =
+          [
+            description ? `${name}-description` : null,
+            error ? `${name}-error` : hint ? `${name}-hint` : null,
+          ]
+            .filter(Boolean)
+            .join(" ") || undefined;
+
         return (
           <div className={clsx("flex flex-col gap-1.5", classNames.root)}>
             {label && (
@@ -142,6 +164,13 @@ export default function ElementInput({
               {(startContent || endContent) ? (
                 <div className={clsx(
                   "flex items-stretch overflow-hidden rounded-lg border transition-colors",
+                  // THE FILL LIVES HERE, not on the input, and it is copied
+                  // from `ui/input` deliberately. With addons the control is
+                  // several elements wide: the input paints its own background
+                  // and the start/end cells paint none, so the field reads as
+                  // two different surfaces stitched together. Filling the
+                  // container and clearing the input below keeps it one.
+                  "bg-transparent dark:bg-input/30",
                   errorVariant === "boxBelow" && error && "rounded-b-none",
                   error ? "border-destructive" : "border-input",
                   classNames.inputWrapper
@@ -167,14 +196,17 @@ export default function ElementInput({
                       disabled={disabled}
                       dir={commaNumber ? "ltr" : dir}
                       aria-invalid={!!error}
-                      aria-describedby={error ? `${name}-error` : hint ? `${name}-hint` : undefined}
+                      aria-describedby={describedBy}
                       inputMode={resolvedInputMode}
                       maxLength={type === "tel" ? (maxLength ?? 11) : maxLength}
                       autoComplete={autoComplete}
                       readOnly={isReadOnly}
                       onFocus={() => { if (isReadOnly) setIsReadOnly(false) }}
                       className={clsx(
-                        "h-10 border-0 rounded-none focus-visible:ring-0 aria-invalid:ring-0",
+                        // `dark:bg-transparent` cancels the `dark:bg-input/30`
+                        // that `ui/input` sets on itself; the wrapper above now
+                        // owns it for the whole control.
+                        "h-10 border-0 rounded-none bg-transparent dark:bg-transparent focus-visible:ring-0 aria-invalid:ring-0",
                         startIcon && "ps-9",
                         isPassword && "pe-10",
                         clearable && field.value && "pe-9",
@@ -220,7 +252,7 @@ export default function ElementInput({
                     disabled={disabled}
                     dir={commaNumber ? "ltr" : dir}
                     aria-invalid={!!error}
-                    aria-describedby={error ? `${name}-error` : hint ? `${name}-hint` : undefined}
+                    aria-describedby={describedBy}
                     inputMode={resolvedInputMode}
                     maxLength={type === "tel" ? (maxLength ?? 11) : maxLength}
                     className={clsx(
@@ -275,6 +307,15 @@ export default function ElementInput({
                 )}
               </AnimatePresence>
             </div>
+
+            {description && (
+              <p
+                id={`${name}-description`}
+                className={clsx("text-sm text-muted-foreground", classNames.description)}
+              >
+                {description}
+              </p>
+            )}
 
             <AnimatePresence initial={false}>
               {errorVariant === "default" && error && (
