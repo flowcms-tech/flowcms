@@ -54,7 +54,7 @@ export async function GET() {
 
   const { httpStatus, ...report } = buildReadinessReport({
     database,
-    storage,
+    storage: storage.status,
     setup,
     captcha: captchaConfig.state,
     auth: authConfigStatus.state,

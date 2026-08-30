@@ -44,11 +44,14 @@ const MANAGERS = ["npm", "pnpm", "yarn", "bun"] as const
 /**
  * Obviously fake external-storage credentials.
  *
- * A LOCAL deployment defaults to external S3 — FlowCMS has no local-filesystem
- * media backend — and `validateConfig` requires the five values for it. Without
- * them every `deploymentMode: "local"` fixture below would throw a ConfigError
- * about storage, turning a test about package managers into a test about
- * something else.
+ * The fixtures below pin `storage: "s3"` explicitly, and `validateConfig`
+ * requires these five values for it. Without them every fixture would throw a
+ * ConfigError about storage, turning a test about package managers into a test
+ * about something else.
+ *
+ * A local deployment now DEFAULTS to `local` storage, which needs none of this —
+ * but these fixtures keep naming `s3` on purpose, so that a change to the
+ * default cannot quietly alter what this file is exercising.
  */
 const EXTERNAL_S3 = {
   endpoint: "https://s3.example.invalid",

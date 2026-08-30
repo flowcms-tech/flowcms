@@ -69,9 +69,11 @@ Deployment
                         Default: docker
   --database <sqlite|postgresql|mysql|mariadb>
                         Default: sqlite
-  --storage <garage|s3> Bundled Garage, or an external S3-compatible endpoint.
-                        Default: garage in Docker, s3 locally. There is no
-                        local-filesystem media backend.
+  --storage <garage|s3|local>
+                        garage: bundled object storage (Docker only). s3: any
+                        external S3-compatible endpoint. local: a directory.
+                        garage and s3 both run STORAGE_DRIVER=s3.
+                        Default: garage in Docker, local otherwise.
   --redis <none|bundled|external>
                         Default: none — the login rate limiter falls back to a
                         per-process implementation, which suits one instance.

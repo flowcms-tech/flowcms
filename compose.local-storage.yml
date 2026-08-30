@@ -1,0 +1,35 @@
+# Local filesystem storage — disables the bundled Garage service.
+#
+#   docker compose -f compose.yml -f compose.local-storage.yml up -d
+#
+# For installs that keep uploads in a directory instead of an object store.
+# Set these in .env:
+#
+#   STORAGE_DRIVER=local
+#   LOCAL_STORAGE_PATH=/data/uploads
+#
+# NO NEW VOLUME IS DECLARED, AND THAT IS THE POINT. `compose.yml` already mounts
+# `flowcms-data:/data`, the Dockerfile creates `/data` and chowns it to the
+# unprivileged `flowcms` user, and `VOLUME ["/data"]` is declared. Uploads under
+# `/data/uploads` are therefore persistent on the volume that already exists and
+# that an operator is already backing up alongside the SQLite database.
+#
+# A second `flowcms-uploads` volume would be a second thing to back up, a second
+# thing to forget, and a second thing `docker compose down -v` destroys.
+#
+# The flip side is worth knowing: with local storage, `down -v` now takes the
+# media AND the database together, where a Garage install kept them on separate
+# volumes.
+#
+# WHY THIS FILE EXISTS SEPARATELY FROM compose.external-s3.yml
+#
+# Both do the same one thing — assign Garage a profile nothing activates, which
+# is how Compose excludes a service from the default set. They are kept apart
+# because a generated project records its overlay list in `.env`, and a local
+# install whose COMPOSE_FILE named `compose.external-s3.yml` would be describing
+# itself as something it is not. The app's `depends_on` for garage is
+# `required: false`, so it starts normally with the service absent.
+
+services:
+  garage:
+    profiles: ["disabled"]

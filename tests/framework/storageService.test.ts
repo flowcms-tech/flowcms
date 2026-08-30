@@ -132,13 +132,31 @@ describe("client construction", () => {
     expect(getS3Config.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
 
-  it("propagates the not-configured error rather than swallowing it", async () => {
-    // `checkStoragePrerequisite` and `checkStorage` both classify deployment
-    // state by catching this, so it must keep escaping the storage layer.
+  it("reports missing configuration as a typed error, not a magic string", async () => {
+    // CHANGED IN PHASE 3, DELIBERATELY. This test used to assert that the
+    // literal text "S3 is not configured" escaped the storage layer, because
+    // `checkStoragePrerequisite` and `checkStorage` classified a deployment by
+    // running `message.includes(...)` on it. That made a human-readable
+    // sentence into load-bearing program logic, and it could not survive a
+    // second backend: a Local installation has no S3 credentials by design, and
+    // the same match would have called it a broken S3 deployment.
+    //
+    // Callers now branch on `problem`. The message stays useful for a log.
     getS3Config.mockRejectedValue(new Error("S3 is not configured — set it in Admin"))
 
+    await expect(StorageService.uploadObject("a.txt", Buffer.from("x"))).rejects.toMatchObject({
+      name: "StorageConfigurationError",
+      problem: "s3_incomplete",
+    })
+  })
+
+  it("still lets an unrelated failure through untranslated", async () => {
+    // A database outage while reading the settings row is not a configuration
+    // problem, and reporting it as one sends an operator to the wrong screen.
+    getS3Config.mockRejectedValue(new Error("SQLITE_BUSY: database is locked"))
+
     await expect(StorageService.uploadObject("a.txt", Buffer.from("x"))).rejects.toThrow(
-      "S3 is not configured",
+      "SQLITE_BUSY",
     )
   })
 })

@@ -111,7 +111,9 @@ docker run --rm -v flowcms_flowcms-data:/data -v "$PWD:/backup" \
 ```
 
 Back up `flowcms_garage-data` and `flowcms_garage-meta` the same way if you use
-the bundled Garage — the database references objects that live there.
+the bundled Garage — the database references objects that live there. With
+`STORAGE_DRIVER=local` there is nothing extra to back up: the uploads are inside
+`flowcms_flowcms-data` alongside the database.
 
 ## Health and readiness
 
@@ -140,7 +142,7 @@ it. Storage state is reported for operators and ignored by the verdict.
 |---|---|
 | `status` | `ready`, `not_ready` |
 | `database` | `ok`, `unavailable`, `migrations_pending` |
-| `storage` | `connected`, `not_configured`, `connection_failed` |
+| `storage` | `connected`, `not_configured`, `misconfigured`, `connection_failed` |
 
 These endpoints are unauthenticated, so they return states and nothing else —
 no hostnames, bucket names, credentials, or error text. Diagnose failures from
@@ -182,6 +184,49 @@ code. It never falls back to exposing `/admin-panel`.
 
 ## Storage
 
+FlowCMS has two storage drivers, selected by `STORAGE_DRIVER`:
+
+| `STORAGE_DRIVER` | Where files live | Extra variables |
+|---|---|---|
+| `s3` (default) | Any S3-compatible bucket, including the bundled Garage | `S3_*` |
+| `local` | A directory on the `/data` volume | `LOCAL_STORAGE_PATH` |
+
+**Garage is not a third driver.** It is an S3-compatible server, so a bundled
+Garage deployment runs `STORAGE_DRIVER=s3` pointed at `http://garage:3900`. The
+application cannot tell it apart from AWS or R2 — which is exactly why moving
+between them is an edit to five environment values and nothing more.
+
+**Omitting `STORAGE_DRIVER` means `s3`.** That default exists so installations
+created before the variable existed keep working after an upgrade; it is an
+upgrade path, not a recommendation.
+
+### Local filesystem
+
+```bash
+# .env
+STORAGE_DRIVER=local
+LOCAL_STORAGE_PATH=/data/uploads
+```
+
+```bash
+docker compose -f compose.yml -f compose.local-storage.yml up -d   # no Garage
+```
+
+Uploads become ordinary files under `/data/uploads`. **The path must stay under
+`/data`** — that is the `flowcms-data` named volume, already mounted, already
+created and chowned for the unprivileged runtime user, and already what you back
+up for the SQLite database. Any other directory in the container lives in the
+writable layer and is destroyed on the next `up`, silently: uploads work, then
+are simply gone.
+
+No second volume is created, deliberately. One volume is one thing to back up
+rather than two. The flip side is that `docker compose down -v` now destroys
+media **and** database together, where a Garage install kept them apart.
+
+**Single-node.** Two application replicas do not share this directory unless you
+have put it on a shared filesystem yourself. For more than one instance, use
+S3-compatible storage.
+
 ### Garage (bundled, default)
 
 Garage v2.3.0, single node, `replication_factor = 1`. It bootstraps itself with
@@ -192,8 +237,11 @@ credentials, recreate the layout, or touch existing objects.
 Credentials are **yours** — supplied through the environment rather than
 generated and printed to a log. FlowCMS reaches Garage at `http://garage:3900`
 over the Docker network; no Garage port is published. The browser never talks to
-object storage directly: images are served through `/api/public/images/…` and
-presigned URLs are generated server-side.
+object storage directly — every image is served through the application, at
+`/api/public/images/…` for published content and `/api/media/…` for the admin
+panel. That is load-bearing here rather than merely tidy: `garage` is a hostname
+that only resolves inside the Docker network, so a URL pointing a browser at it
+could never work.
 
 This is a single-node topology suitable for self-hosting, not a
 high-availability cluster. Production HA Garage is a separate operational

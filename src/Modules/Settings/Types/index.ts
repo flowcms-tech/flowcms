@@ -16,6 +16,10 @@ export interface SiteSettings extends Record<string, unknown> {
   faviconKey: string | null
   faviconUrl: string | null
   baseUrl: string
+  /** Which storage backend is running. Environment-only; never editable here. */
+  storageDriver: "s3" | "local" | null
+  /** Only set for the local driver. Deployment-controlled, shown read-only. */
+  localStoragePath: string
   s3Endpoint: string
   s3Region: string
   s3Bucket: string

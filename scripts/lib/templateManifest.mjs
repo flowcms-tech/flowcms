@@ -69,6 +69,7 @@ export const FILES = [
   "compose.yml",
   "compose.dev.yml",
   "compose.external-s3.yml",
+  "compose.local-storage.yml",
   "compose.postgres.yml",
   "compose.mysql.yml",
   "compose.mariadb.yml",

@@ -69,9 +69,13 @@ export default function PrerequisiteList({
       </ul>
       {storage !== "ready" && (
         <p className="mt-3 text-xs text-muted-foreground">
-          FlowCMS stores all media in S3-compatible storage and has no local file backend, so
-          setup cannot complete until storage works. Check the deployment&apos;s storage
-          configuration, then reload this page.
+          FlowCMS stores every uploaded file through its storage backend, so setup cannot
+          complete until that backend works. Check the deployment&apos;s{" "}
+          <code className="rounded bg-muted px-1 py-0.5">STORAGE_DRIVER</code> — either{" "}
+          <code className="rounded bg-muted px-1 py-0.5">local</code>, with a writable{" "}
+          <code className="rounded bg-muted px-1 py-0.5">LOCAL_STORAGE_PATH</code>, or{" "}
+          <code className="rounded bg-muted px-1 py-0.5">s3</code> with a reachable bucket — then
+          reload this page.
         </p>
       )}
       {captcha !== "ready" && (

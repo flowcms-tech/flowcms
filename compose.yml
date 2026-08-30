@@ -6,6 +6,10 @@
 # For a hosted S3 provider instead of the bundled Garage:
 #   docker compose -f compose.yml -f compose.external-s3.yml up -d
 #
+# To keep uploads in a directory on the /data volume instead of an object store:
+#   docker compose -f compose.yml -f compose.local-storage.yml up -d
+#   ... with STORAGE_DRIVER=local and LOCAL_STORAGE_PATH=/data/uploads in .env
+#
 # For development with hot reload:
 #   docker compose -f compose.yml -f compose.dev.yml up
 #
@@ -86,10 +90,24 @@ services:
       # service below for what that costs.
       REDIS_URL: ${REDIS_URL:-}
 
-      # Storage. Defaults target the bundled Garage service over the Docker
-      # network. `garage` is an internal hostname by design: the browser never
-      # talks to object storage directly — images are served through
-      # /api/public/images and presigned URLs are generated server-side.
+      # Storage. Which backend serves uploads.
+      #
+      # Unset means `s3`, which is what every installation predating this
+      # variable expects — the default is an upgrade path, not a preference.
+      # A bundled-Garage deployment is `s3`: Garage is an S3-compatible server,
+      # not a driver of its own.
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-s3}
+
+      # Only read when STORAGE_DRIVER=local. MUST live under /data — that is the
+      # named volume mounted below and the only path in this container that
+      # survives a restart. There is deliberately no default: a relative path
+      # would resolve against /app and lose every upload on the next `up`.
+      LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-}
+
+      # Only read when STORAGE_DRIVER=s3. Defaults target the bundled Garage
+      # service over the Docker network. `garage` is an internal hostname by
+      # design: the browser never talks to object storage directly — every image
+      # is served through the application.
       S3_ENDPOINT: ${S3_ENDPOINT:-http://garage:3900}
       S3_REGION: ${S3_REGION:-garage}
       S3_BUCKET: ${S3_BUCKET:-${GARAGE_BUCKET:-flowcms}}

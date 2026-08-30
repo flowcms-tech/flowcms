@@ -1,5 +1,7 @@
 import { handle } from "@/db/client"
-import { getS3Config } from "@/Framework/Settings/SettingsService"
+import { getStorageConfig } from "@/Framework/Storage/storageConfig"
+import { StorageConfigurationError } from "@/Framework/Storage/StorageErrors"
+import type { StorageDriverName } from "@/Framework/Storage/StorageDriver"
 
 /**
  * Liveness and readiness are different questions, and this module answers the
@@ -16,8 +18,39 @@ import { getS3Config } from "@/Framework/Settings/SettingsService"
  *  because the two have different operator actions. */
 export type DatabaseStatus = "ok" | "unavailable" | "migrations_pending"
 
-/** Storage states. Reported for operators; never gates readiness. */
-export type StorageStatus = "connected" | "not_configured" | "connection_failed"
+/**
+ * Storage states. Reported for operators; never gates readiness.
+ *
+ * `misconfigured` is distinct from `not_configured` because the operator's next
+ * action differs. "Not configured" means nothing has been set — the normal
+ * state of a fresh install whose owner has not opened Settings yet.
+ * "Misconfigured" means something WAS set and is wrong: an unknown
+ * `STORAGE_DRIVER`, or `STORAGE_DRIVER=local` with no `LOCAL_STORAGE_PATH`.
+ * Collapsing the two would tell an operator who made a typo that they had
+ * simply not started.
+ */
+export type StorageStatus =
+  | "connected"
+  | "not_configured"
+  | "misconfigured"
+  | "connection_failed"
+
+/**
+ * What `checkStorage` reports: a state, plus which backend it is about.
+ *
+ * THE DRIVER IS NOT PUT ON THE WIRE. `/api/ready` is unauthenticated
+ * infrastructure and its payload is pinned to an exact field list by three
+ * tests, precisely so that a field cannot be added casually. Knowing whether an
+ * instance stores files on a filesystem or in an object store is useful to an
+ * operator and is also a fact about the deployment that an anonymous caller has
+ * no need for, so it stays available to authenticated surfaces — the setup
+ * screen and Admin > Settings > Storage — and off the public probe.
+ */
+export interface StorageReadiness {
+  status: StorageStatus
+  /** Null when `STORAGE_DRIVER` names something that is not a driver. */
+  driver: StorageDriverName | null
+}
 
 /**
  * CMS initialization state. Reported for operators; never gates readiness.
@@ -155,22 +188,46 @@ export async function checkDatabase(): Promise<DatabaseStatus> {
 /**
  * Storage state, without a network round trip.
  *
- * `getS3Config()` throws when the bucket or credentials are absent, which is
- * precisely the not-configured case. It is deliberately NOT followed by a
- * HeadBucket call: this probe runs every fifteen seconds for the life of the
- * container, and turning it into steady authenticated traffic against the
- * operator's object store — or letting it stall on that store's timeout — costs
- * more than the freshness is worth.
+ * Resolving the configuration is the whole check. `getStorageConfig()` throws a
+ * typed `StorageConfigurationError` when the driver is unknown, when a local
+ * deployment has no root, or when an S3 deployment is missing a bucket or
+ * credentials — which covers every "this cannot work" case reachable without
+ * touching the backend.
  *
- * `connection_failed` therefore exists in the vocabulary but is never returned
- * here. It is what a deliberate connection test in Settings reports, where a
- * human is waiting for the answer and the round trip is the point.
+ * It is deliberately NOT followed by a HeadBucket or a directory stat: this
+ * probe runs every fifteen seconds for the life of the container, and turning
+ * it into steady authenticated traffic against the operator's object store — or
+ * letting it stall on that store's timeout — costs more than the freshness is
+ * worth. `connection_failed` therefore exists in the vocabulary but is never
+ * returned here; it is what a deliberate connection test reports, where a human
+ * is waiting for the answer and the round trip is the point.
+ *
+ * REPORTS THE ACTIVE DRIVER, NOT S3. This used to call `getS3Config()`
+ * unconditionally, so a perfectly healthy Local deployment — which has no S3
+ * credentials by design — reported `not_configured` forever, and a Local
+ * deployment with a broken root reported `connected` because the S3 settings
+ * happened to be present.
  */
-export async function checkStorage(): Promise<StorageStatus> {
+export async function checkStorage(): Promise<StorageReadiness> {
   try {
-    await getS3Config()
-    return "connected"
-  } catch {
-    return "not_configured"
+    const config = await getStorageConfig()
+    return { status: "connected", driver: config.driver }
+  } catch (error) {
+    if (error instanceof StorageConfigurationError) {
+      // "Nothing is set up yet" versus "what is set up is wrong". A fresh
+      // install sits in the first state legitimately; the second is a typo.
+      const status: StorageStatus =
+        error.problem === "s3_incomplete" ? "not_configured" : "misconfigured"
+      const driver: StorageDriverName | null =
+        error.problem === "driver_invalid"
+          ? null
+          : error.problem === "s3_incomplete"
+            ? "s3"
+            : "local"
+      return { status, driver }
+    }
+    // Not a configuration problem — the settings row could not be read at all.
+    // Reported as a backend failure rather than as missing configuration.
+    return { status: "connection_failed", driver: null }
   }
 }

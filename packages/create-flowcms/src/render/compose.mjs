@@ -34,6 +34,7 @@ export const ALL_OVERLAYS = [
   "compose.mysql.yml",
   "compose.mariadb.yml",
   "compose.external-s3.yml",
+  "compose.local-storage.yml",
   "compose.dev.yml",
 ]
 
@@ -52,10 +53,19 @@ export function composeFilesFor(config) {
   const database = overlayFor(config.database)
   if (database) files.push(database)
 
-  // External S3 does not add a service — it REMOVES one, by assigning Garage a
-  // profile nothing activates. The app's `depends_on` for garage is
+  // NEITHER STORAGE OVERLAY ADDS A SERVICE — each REMOVES one, by assigning
+  // Garage a profile nothing activates. The app's `depends_on` for garage is
   // `required: false`, so it starts normally with the service absent.
+  //
+  // Two files rather than one shared "no-garage" overlay: a generated project
+  // records its overlay list in `.env`, and a local-storage install whose
+  // COMPOSE_FILE named `compose.external-s3.yml` would be describing itself as
+  // something it is not.
+  //
+  // `garage` selects no overlay at all, because the bundled service is what the
+  // base `compose.yml` already starts.
   if (config.storage === "s3") files.push("compose.external-s3.yml")
+  if (config.storage === "local") files.push("compose.local-storage.yml")
 
   return files
 }

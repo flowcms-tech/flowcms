@@ -56,3 +56,48 @@ export class StorageAccessError extends Error {
     this.cause = cause
   }
 }
+
+/**
+ * What is wrong with the deployment's storage configuration.
+ *
+ * A CODE, NOT A MESSAGE, and that distinction is the entire reason this type
+ * exists. Readiness and first-run setup used to classify storage by running
+ * `error.message.includes("S3 is not configured")` against a human-readable
+ * string — so the sentence in `getS3Config` was load-bearing program logic that
+ * looked like prose, and rewording it would have silently reclassified every
+ * deployment's state.
+ *
+ * It also could not survive a second backend: a Local installation has no S3
+ * credentials by design, and matching that string would have reported a
+ * correctly-configured filesystem deployment as a broken S3 one.
+ */
+export type StorageConfigProblem =
+  /** `STORAGE_DRIVER` names something that is not a driver. */
+  | "driver_invalid"
+  /** Driver is `s3`, but bucket or credentials are absent from settings AND env. */
+  | "s3_incomplete"
+  /** Driver is `local`, but `LOCAL_STORAGE_PATH` is unset. */
+  | "local_path_missing"
+  /** Driver is `local` and the root cannot be created, read or written. */
+  | "local_path_unusable"
+
+/**
+ * The deployment's storage configuration cannot be resolved.
+ *
+ * Distinct from `StorageAccessError`, which means a configured backend failed:
+ * this one means there is nothing coherent to talk to yet. The two lead to
+ * different operator actions — edit configuration versus investigate an outage —
+ * and readiness reports them as different states.
+ *
+ * `message` stays useful for a server log. `problem` is what code branches on.
+ */
+export class StorageConfigurationError extends Error {
+  readonly problem: StorageConfigProblem
+
+  constructor(problem: StorageConfigProblem, message: string, options?: { cause?: unknown }) {
+    super(message)
+    this.name = "StorageConfigurationError"
+    this.problem = problem
+    if (options?.cause !== undefined) this.cause = options.cause
+  }
+}

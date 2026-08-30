@@ -5,6 +5,7 @@ import {
   checkStoragePrerequisite,
 } from "@/Framework/Setup/prerequisites"
 import { StorageService } from "@/Framework/Storage/StorageService"
+import { StorageConfigurationError } from "@/Framework/Storage/StorageErrors"
 
 /**
  * What a deployment must be able to DO before its installation may be marked
@@ -12,8 +13,9 @@ import { StorageService } from "@/Framework/Storage/StorageService"
  *
  * The gate is a pure function so the policy can be pinned exhaustively, and the
  * storage probe is a real round-trip so it proves the thing that matters:
- * FlowCMS has no local media backend, so a credential that can list but not
- * write passes a bucket check and fails every upload the operator ever makes.
+ * every upload goes through the active driver, so a credential that can list
+ * but not write passes a bucket check and fails every upload the operator ever
+ * makes.
  */
 
 afterEach(() => {
@@ -129,13 +131,37 @@ describe("the storage probe", () => {
     expect(new Set(keys).size).toBe(2)
   })
 
-  it("reports not_configured when storage has never been set up", async () => {
+  it.each([
+    ["s3_incomplete", "S3 storage is not fully configured."],
+    ["local_path_missing", "STORAGE_DRIVER=local requires LOCAL_STORAGE_PATH."],
+    ["driver_invalid", 'STORAGE_DRIVER must be "s3" or "local".'],
+  ] as const)("reports not_configured for %s", async (problem, message) => {
+    // CLASSIFIED BY TYPE, NOT BY MESSAGE. This used to reject with a plain
+    // Error carrying the literal text "S3 is not configured", because that is
+    // what the probe matched on. That match was true of every correctly
+    // configured LOCAL deployment — which has no S3 credentials by design — so
+    // a working filesystem installation would have been told its storage was
+    // broken and refused permission to finish setup.
+    //
+    // All three configuration problems land on the same state because the
+    // operator's next action is the same: open the deployment's storage
+    // configuration. They are separate CODES so that other callers can tell
+    // them apart, and so that this page never has to name which one it was to
+    // an anonymous visitor.
     vi.spyOn(StorageService, "uploadObject").mockRejectedValue(
-      new Error(
-        "S3 is not configured — set it in Admin > Settings > Global, or via S3_BUCKET/S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY.",
-      ),
+      new StorageConfigurationError(problem, message),
     )
     expect(await checkStoragePrerequisite()).toBe("not_configured")
+  })
+
+  it("reports unavailable for a plain error that merely mentions configuration", async () => {
+    // The inverse of the rule above: a backend failure whose message happens to
+    // contain the old magic words must NOT be mistaken for missing
+    // configuration now that classification is by type.
+    vi.spyOn(StorageService, "uploadObject").mockRejectedValue(
+      new Error("upstream says: S3 is not configured correctly on the proxy"),
+    )
+    expect(await checkStoragePrerequisite()).toBe("unavailable")
   })
 
   it("reports unavailable when configured storage rejects the write", async () => {
