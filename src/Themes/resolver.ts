@@ -172,12 +172,45 @@ export interface ResolvedSurface<K extends ThemeSurface> {
  * never reads a global — which is what keeps a theme a pure function of its
  * props and keeps package themes viable.
  */
+/**
+ * A null-prototype settings bag, copied into a plain object, at the one
+ * boundary where settings stop being internal state and become component props.
+ *
+ * `Framework/Settings/themeSettingsResolve` builds that bag with
+ * `Object.create(null)` deliberately: a stored key named `__proto__` or
+ * `constructor` must never reach `Object.prototype` through a later lookup.
+ * React's server-to-client serializer refuses a null-prototype object outright
+ * — "Classes or null prototypes are not supported" — so the moment a theme
+ * surface is a Client Component, handing it that bag crashes the render rather
+ * than degrading. `Themes/default/NotFound` is exactly such a component, for
+ * framer-motion, which is how this was found: every 404 on the public site.
+ *
+ * Spreading keeps both properties. Resolution and lookups still work against
+ * the hardened prototype-free object; what crosses into a component is a plain
+ * copy of it.
+ *
+ * HERE rather than in the theme or the route. A theme author writing the next
+ * Client Component surface cannot be expected to know that the settings they
+ * were handed are unserializable, and a fix in `not-found.tsx` would leave
+ * them to discover it the same way.
+ *
+ * A shallow copy is the whole job: every value in the bag is a string, number
+ * or boolean, because `validation/settingsDefinition` is what decides what a
+ * field may be and admits no nested shapes.
+ */
+function serializableSettings(values: ThemeSettingsValues): ThemeSettingsValues {
+  return { ...values }
+}
+
 export async function resolveSurface<K extends ThemeSurface>(
   surface: K,
 ): Promise<ResolvedSurface<K>> {
   const { theme, fallback } = await resolveThemeAndWarn()
   const { component, owner } = selectSurfaceEntry(theme, fallback, surface)
-  return { Component: component, settings: (await getThemeSettings(owner.manifest.slug)).values }
+  return {
+    Component: component,
+    settings: serializableSettings((await getThemeSettings(owner.manifest.slug)).values),
+  }
 }
 
 /**
@@ -216,7 +249,7 @@ export async function resolveLayoutAndSlots(): Promise<{
   return {
     Layout: theme.Layout,
     slots: theme.manifest.menuSlots,
-    settings: (await getThemeSettings(theme.manifest.slug)).values,
+    settings: serializableSettings((await getThemeSettings(theme.manifest.slug)).values),
   }
 }
 
