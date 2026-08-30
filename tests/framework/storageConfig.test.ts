@@ -22,7 +22,7 @@ vi.mock("@/Framework/Settings/SettingsService", () => ({
   getS3Config: () => getS3Config(),
 }))
 
-const { getStorageConfig, resolveStorageDriverName, storageLocationId, LOCAL_STORAGE_PATH_ENV, STORAGE_DRIVER_ENV } =
+const { getEnvironmentStorageConfig, resolveStorageDriverName, storageLocationId, LOCAL_STORAGE_PATH_ENV, STORAGE_DRIVER_ENV } =
   await import("@/Framework/Storage/storageConfig")
 
 const S3_CONFIG = {
@@ -119,13 +119,13 @@ describe("choosing the driver", () => {
 
 describe("resolving the s3 configuration", () => {
   it("returns the settings-over-environment values unchanged", async () => {
-    const config = await getStorageConfig(env({ STORAGE_DRIVER: "s3" }))
+    const config = await getEnvironmentStorageConfig(env({ STORAGE_DRIVER: "s3" }))
 
     expect(config).toEqual({ driver: "s3", ...S3_CONFIG })
   })
 
   it("resolves s3 by default, exactly as an existing installation does", async () => {
-    const config = await getStorageConfig(env())
+    const config = await getEnvironmentStorageConfig(env())
 
     expect(config.driver).toBe("s3")
     expect(getS3Config).toHaveBeenCalled()
@@ -134,7 +134,7 @@ describe("resolving the s3 configuration", () => {
   it("reports incomplete s3 configuration as a typed problem", async () => {
     getS3Config.mockRejectedValue(new Error("S3 is not configured — set it in Admin"))
 
-    expect(await problemOf(getStorageConfig(env({ STORAGE_DRIVER: "s3" })))).toBe("s3_incomplete")
+    expect(await problemOf(getEnvironmentStorageConfig(env({ STORAGE_DRIVER: "s3" })))).toBe("s3_incomplete")
   })
 
   it("does not disguise an unrelated failure as a configuration problem", async () => {
@@ -143,13 +143,13 @@ describe("resolving the s3 configuration", () => {
     // screen during an incident.
     getS3Config.mockRejectedValue(new Error("SQLITE_BUSY: database is locked"))
 
-    await expect(getStorageConfig(env({ STORAGE_DRIVER: "s3" }))).rejects.toThrow("SQLITE_BUSY")
+    await expect(getEnvironmentStorageConfig(env({ STORAGE_DRIVER: "s3" }))).rejects.toThrow("SQLITE_BUSY")
   })
 })
 
 describe("resolving the local configuration", () => {
   it("returns the configured root", async () => {
-    const config = await getStorageConfig(
+    const config = await getEnvironmentStorageConfig(
       env({ STORAGE_DRIVER: "local", LOCAL_STORAGE_PATH: "/data/uploads" }),
     )
 
@@ -161,7 +161,7 @@ describe("resolving the local configuration", () => {
     // an S3 configuration failure.
     getS3Config.mockRejectedValue(new Error("S3 is not configured"))
 
-    const config = await getStorageConfig(
+    const config = await getEnvironmentStorageConfig(
       env({ STORAGE_DRIVER: "local", LOCAL_STORAGE_PATH: "/data/uploads" }),
     )
 
@@ -174,21 +174,21 @@ describe("resolving the local configuration", () => {
     // against the process working directory, which inside the container is
     // `/app` — not the persistent `/data` volume. Uploads would work, survive
     // until the next `docker compose up`, and then be gone.
-    expect(await problemOf(getStorageConfig(env({ STORAGE_DRIVER: "local" })))).toBe(
+    expect(await problemOf(getEnvironmentStorageConfig(env({ STORAGE_DRIVER: "local" })))).toBe(
       "local_path_missing",
     )
   })
 
   it("treats a blank LOCAL_STORAGE_PATH as missing", async () => {
     expect(
-      await problemOf(getStorageConfig(env({ STORAGE_DRIVER: "local", LOCAL_STORAGE_PATH: "  " }))),
+      await problemOf(getEnvironmentStorageConfig(env({ STORAGE_DRIVER: "local", LOCAL_STORAGE_PATH: "  " }))),
     ).toBe("local_path_missing")
   })
 
   it("names the variable to set, so the message is actionable", async () => {
     let message = ""
     try {
-      await getStorageConfig(env({ STORAGE_DRIVER: "local" }))
+      await getEnvironmentStorageConfig(env({ STORAGE_DRIVER: "local" }))
     } catch (error) {
       message = (error as Error).message
     }
@@ -196,7 +196,7 @@ describe("resolving the local configuration", () => {
   })
 
   it("trims the configured root", async () => {
-    const config = await getStorageConfig(
+    const config = await getEnvironmentStorageConfig(
       env({ STORAGE_DRIVER: "local", LOCAL_STORAGE_PATH: " /data/uploads " }),
     )
     expect(config).toEqual({ driver: "local", root: "/data/uploads" })

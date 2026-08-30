@@ -29,6 +29,18 @@ export interface StorageObjectSummary {
 }
 
 /**
+ * One entry in a full-store scan: a stored object, or a folder that exists in
+ * its own right.
+ */
+export interface StorageEntry {
+  key: string
+  /** `directory` means an S3 marker key ending in `/`, or an empty folder. */
+  kind: "file" | "directory"
+  size: number
+  lastModified: Date
+}
+
+/**
  * One level of the tree.
  *
  * `directories` are full prefixes (`posts/2026/`), not basenames — the File
@@ -69,6 +81,27 @@ export interface StorageDriver {
 
   createDirectory(prefix: string): Promise<void>
   deletePrefix(prefix: string): Promise<void>
+
+  /**
+   * Every entry in the store, streamed.
+   *
+   * SEPARATE FROM `listObjects` ON PURPOSE, and migration is why. `listObjects`
+   * paginates internally and then returns ONE ARRAY — fine for a folder, and
+   * exactly wrong for a store with half a million objects, where it means
+   * holding the entire inventory in memory before the first byte is copied.
+   *
+   * An async iterator lets a migration work in bounded batches and stop
+   * wherever it likes, which is what makes it resumable after a restart.
+   *
+   * `after` resumes from a key: enumeration is in ascending key order on both
+   * backends, so the last key processed is a complete resume token. A numeric
+   * offset would not be — the store changes while the migration runs.
+   *
+   * DIRECTORIES ARE ENTRIES TOO. An empty folder is a zero-byte marker object
+   * on S3 and a real directory on a filesystem, and a migration that ignored
+   * them would silently drop every empty folder an operator had made.
+   */
+  scanEntries(options?: { after?: string }): AsyncIterable<StorageEntry>
 
   copyObject(oldKey: string, newKey: string): Promise<void>
   renameObject(oldKey: string, newKey: string): Promise<void>

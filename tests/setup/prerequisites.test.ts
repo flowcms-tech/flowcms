@@ -132,10 +132,16 @@ describe("the storage probe", () => {
   })
 
   it.each([
-    ["s3_incomplete", "S3 storage is not fully configured."],
-    ["local_path_missing", "STORAGE_DRIVER=local requires LOCAL_STORAGE_PATH."],
-    ["driver_invalid", 'STORAGE_DRIVER must be "s3" or "local".'],
-  ] as const)("reports not_configured for %s", async (problem, message) => {
+    // SPLIT IN PHASE 4. All three used to land on `not_configured`, which was
+    // inconsistent with `/api/ready` — the same deployment was described two
+    // different ways depending on which surface you asked. The distinction that
+    // matters: nothing has been set, versus something was set and is wrong.
+    //
+    // `storageStatusParity.test.ts` pins both surfaces against one table.
+    ["s3_incomplete", "S3 storage is not fully configured.", "not_configured"],
+    ["local_path_missing", "STORAGE_DRIVER=local requires LOCAL_STORAGE_PATH.", "misconfigured"],
+    ["driver_invalid", 'STORAGE_DRIVER must be "s3" or "local".', "misconfigured"],
+  ] as const)("reports %s as %s", async (problem, message, expected) => {
     // CLASSIFIED BY TYPE, NOT BY MESSAGE. This used to reject with a plain
     // Error carrying the literal text "S3 is not configured", because that is
     // what the probe matched on. That match was true of every correctly
@@ -151,7 +157,7 @@ describe("the storage probe", () => {
     vi.spyOn(StorageService, "uploadObject").mockRejectedValue(
       new StorageConfigurationError(problem, message),
     )
-    expect(await checkStoragePrerequisite()).toBe("not_configured")
+    expect(await checkStoragePrerequisite()).toBe(expected)
   })
 
   it("reports unavailable for a plain error that merely mentions configuration", async () => {

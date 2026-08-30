@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs"
 import path from "node:path"
 import { createLocalPathResolver, type LocalPathResolver } from "../localPath"
 import { StorageAccessError, StorageObjectNotFoundError } from "../StorageErrors"
-import type { DirectoryListing, StorageDriver, StorageObjectSummary } from "../StorageDriver"
+import type { DirectoryListing, StorageDriver, StorageEntry, StorageObjectSummary } from "../StorageDriver"
 
 /**
  * The filesystem backend.
@@ -216,6 +216,56 @@ export function createLocalStorageDriver(rootPath: string): StorageDriver {
       directories.sort()
       files.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
       return { directories, files }
+    },
+
+    async *scanEntries(options) {
+      const resolver = await paths()
+
+      /**
+       * Depth-first, in sorted order, so the sequence matches S3's ascending
+       * key order and `after` means the same thing on both backends.
+       *
+       * EMPTY DIRECTORIES ARE YIELDED; non-empty ones are not. A folder with
+       * files in it exists at the destination as soon as those files are
+       * written, but an empty one has nothing to imply it — it is exactly the
+       * case S3 invented marker objects for, and dropping it would silently
+       * lose every empty folder an operator made.
+       */
+      async function* walk(dir: string, prefix: string): AsyncGenerator<StorageEntry> {
+        const entries = await visibleEntries(dir)
+        entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+
+        for (const entry of entries) {
+          const full = path.join(dir, entry.name)
+          if (entry.kind === "directory") {
+            const children = await visibleEntries(full)
+            if (children.length === 0) {
+              const stats = await fs.stat(full).catch(() => null)
+              yield {
+                key: `${prefix}${entry.name}/`,
+                kind: "directory",
+                size: 0,
+                lastModified: stats?.mtime ?? new Date(0),
+              }
+            } else {
+              yield* walk(full, `${prefix}${entry.name}/`)
+            }
+          } else {
+            const summary = await summarize(full, `${prefix}${entry.name}`)
+            if (summary) {
+              yield { key: summary.key, kind: "file", size: summary.size, lastModified: summary.lastModified }
+            }
+          }
+        }
+      }
+
+      for await (const entry of walk(resolver.root, "")) {
+        // Filtering after the walk rather than pruning during it: correctness
+        // first, and a resumed migration skips a bounded prefix of an already
+        // sorted sequence.
+        if (options?.after && entry.key <= options.after) continue
+        yield entry
+      }
     },
 
     async createDirectory(prefix) {

@@ -56,6 +56,10 @@ vi.mock("@aws-sdk/s3-request-presigner", () => ({
 const getS3Config = vi.fn()
 vi.mock("@/Framework/Settings/SettingsService", () => ({
   getS3Config: () => getS3Config(),
+  // No settings row means no pinned active topology, so the environment is
+  // authoritative — the state every one of these characterization tests was
+  // written against, and the state a legacy installation is in.
+  getSettingsRow: () => Promise.resolve(null),
 }))
 
 const { StorageService } = await import("@/Framework/Storage/StorageService")

@@ -36,6 +36,9 @@ function fakeDriver(overrides: Partial<StorageDriver> = {}): StorageDriver {
     renameObject: vi.fn(async () => {}),
     copyPrefix: vi.fn(async () => {}),
     renamePrefix: vi.fn(async () => {}),
+    // Streaming scan. Not exercised by this file; present because the contract
+    // requires it.
+    scanEntries: async function* () {},
     ...overrides,
   }
 }

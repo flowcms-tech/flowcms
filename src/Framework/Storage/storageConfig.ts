@@ -87,8 +87,17 @@ export function resolveStorageDriverName(env: NodeJS.ProcessEnv = process.env): 
   )
 }
 
-/** The active driver's full configuration. */
-export async function getStorageConfig(
+/**
+ * The configuration the ENVIRONMENT describes.
+ *
+ * RENAMED IN PHASE 4, AND THE NAME IS THE POINT. This used to be
+ * `getStorageConfig()` — the thing `StorageService` resolved on every request —
+ * which made an environment edit an immediate, silent relocation. It is now the
+ * BOOTSTRAP and CANDIDATE configuration: what a fresh installation starts from,
+ * and what a migration can be pointed at. `getActiveStorageConfig()` in
+ * `activeStorage.ts` is what actually serves requests.
+ */
+export async function getEnvironmentStorageConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedStorageConfig> {
   const driver = resolveStorageDriverName(env)

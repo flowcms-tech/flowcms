@@ -1,6 +1,6 @@
 import { S3StorageDriver } from "./drivers/S3StorageDriver"
 import { createLocalStorageDriver } from "./drivers/LocalStorageDriver"
-import { getStorageConfig } from "./storageConfig"
+import { getActiveStorageConfig } from "./activeStorage"
 import type { StorageDriver } from "./StorageDriver"
 
 /**
@@ -12,11 +12,15 @@ import type { StorageDriver } from "./StorageDriver"
  * driver the deployment configured — and that is exactly why the whole File
  * Manager works unmodified on a filesystem.
  *
- * RESOLVED PER CALL, NEVER MEMOISED AT MODULE SCOPE. The rule the S3 connection
- * already followed, for the same reason: configuration is read fresh so a
- * change takes effect on the next request rather than the next restart. Caching
- * the driver would also outlive a configuration change, which is precisely the
- * failure the later switching work has to avoid.
+ * RESOLVED PER CALL, NEVER MEMOISED AT MODULE SCOPE. Configuration is read
+ * fresh so that a cutover takes effect on the very next request rather than the
+ * next restart — a memoised driver would keep serving the old location after
+ * the migration said otherwise.
+ *
+ * IT RESOLVES THE ACTIVE TOPOLOGY, NOT THE ENVIRONMENT. `getActiveStorageConfig`
+ * reads the persisted snapshot; the environment only answers while an
+ * installation has not pinned one yet. That is what stops an edited
+ * `STORAGE_DRIVER` from silently repointing a live site at an empty location.
  */
 
 /**
@@ -45,7 +49,7 @@ function localDriverFor(root: string): StorageDriver {
 }
 
 export async function resolveStorageDriver(): Promise<StorageDriver> {
-  const config = await getStorageConfig()
+  const config = await getActiveStorageConfig()
 
   // GARAGE IS NOT A CASE HERE, and never will be. A bundled-Garage deployment
   // is `driver: "s3"` pointed at `http://garage:3900`; the driver cannot tell

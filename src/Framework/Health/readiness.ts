@@ -1,5 +1,5 @@
 import { handle } from "@/db/client"
-import { getStorageConfig } from "@/Framework/Storage/storageConfig"
+import { getActiveStorageConfig } from "@/Framework/Storage/activeStorage"
 import { StorageConfigurationError } from "@/Framework/Storage/StorageErrors"
 import type { StorageDriverName } from "@/Framework/Storage/StorageDriver"
 
@@ -188,7 +188,7 @@ export async function checkDatabase(): Promise<DatabaseStatus> {
 /**
  * Storage state, without a network round trip.
  *
- * Resolving the configuration is the whole check. `getStorageConfig()` throws a
+ * Resolving the configuration is the whole check. `getActiveStorageConfig()` throws a
  * typed `StorageConfigurationError` when the driver is unknown, when a local
  * deployment has no root, or when an S3 deployment is missing a bucket or
  * credentials — which covers every "this cannot work" case reachable without
@@ -210,12 +210,17 @@ export async function checkDatabase(): Promise<DatabaseStatus> {
  */
 export async function checkStorage(): Promise<StorageReadiness> {
   try {
-    const config = await getStorageConfig()
+    const config = await getActiveStorageConfig()
     return { status: "connected", driver: config.driver }
   } catch (error) {
     if (error instanceof StorageConfigurationError) {
       // "Nothing is set up yet" versus "what is set up is wrong". A fresh
       // install sits in the first state legitimately; the second is a typo.
+      //
+      // `classifyStorageFailure` in Setup/prerequisites.ts maps the SAME problem
+      // codes onto its own vocabulary in exactly this shape. The two surfaces
+      // must never describe one deployment differently, and
+      // `storageStatusParity.test.ts` fails if they diverge.
       const status: StorageStatus =
         error.problem === "s3_incomplete" ? "not_configured" : "misconfigured"
       const driver: StorageDriverName | null =

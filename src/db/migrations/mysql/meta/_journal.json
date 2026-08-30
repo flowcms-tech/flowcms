@@ -36,6 +36,13 @@
       "when": 1787800000000,
       "tag": "0004_setup_marker",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1787900000000,
+      "tag": "0005_storage_topology",
+      "breakpoints": true
     }
   ]
 }

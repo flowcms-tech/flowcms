@@ -17,6 +17,8 @@ import { join } from "node:path"
 const getS3Config = vi.fn()
 vi.mock("@/Framework/Settings/SettingsService", () => ({
   getS3Config: () => getS3Config(),
+  // Unpinned: the environment is authoritative, which is what these tests vary.
+  getSettingsRow: () => Promise.resolve(null),
 }))
 
 const { checkStorage } = await import("@/Framework/Health/readiness")
@@ -115,17 +117,37 @@ describe("checkStoragePrerequisite — a real round trip, on the active driver",
     expect(await checkStoragePrerequisite()).toBe("ready")
   })
 
-  it("reports a missing LOCAL_STORAGE_PATH as not_configured", async () => {
+  it("reports a missing LOCAL_STORAGE_PATH as misconfigured", async () => {
     vi.stubEnv("STORAGE_DRIVER", "local")
     vi.stubEnv("LOCAL_STORAGE_PATH", "")
+
+    // CHANGED IN PHASE 4. This used to collapse to `not_configured`, which was
+    // inconsistent with `/api/ready` — the same deployment was described two
+    // different ways depending on which surface you asked.
+    expect(await checkStoragePrerequisite()).toBe("misconfigured")
+  })
+
+  it("reports an invalid STORAGE_DRIVER as misconfigured", async () => {
+    vi.stubEnv("STORAGE_DRIVER", "nonsense")
+
+    expect(await checkStoragePrerequisite()).toBe("misconfigured")
+  })
+
+  it("still reports a fresh, wholly unconfigured install as not_configured", async () => {
+    // The distinction that matters: nothing set, versus something set wrongly.
+    vi.stubEnv("STORAGE_DRIVER", "")
+    getS3Config.mockRejectedValue(new Error("S3 is not configured"))
 
     expect(await checkStoragePrerequisite()).toBe("not_configured")
   })
 
-  it("reports an invalid STORAGE_DRIVER as not_configured", async () => {
-    vi.stubEnv("STORAGE_DRIVER", "nonsense")
+  it("describes garage — the likeliest wrong value — as misconfigured, not missing", async () => {
+    // `garage` IS one of the installer's storage choices, so it is the value an
+    // operator is most likely to put here. Told "not configured", they would go
+    // and check S3 credentials that are perfectly fine.
+    vi.stubEnv("STORAGE_DRIVER", "garage")
 
-    expect(await checkStoragePrerequisite()).toBe("not_configured")
+    expect(await checkStoragePrerequisite()).toBe("misconfigured")
   })
 
   it("reports an unusable local root as unavailable, not not_configured", async () => {

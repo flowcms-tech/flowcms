@@ -18,7 +18,35 @@ import { getAuthSecretConfig } from "@/Framework/Auth/authSecretConfig"
  */
 
 export type DatabasePrerequisite = "ready" | "migrations_pending" | "unavailable"
-export type StoragePrerequisite = "ready" | "not_configured" | "unavailable"
+/**
+ * Storage states the setup page reports.
+ *
+ * `misconfigured` IS DISTINCT FROM `not_configured`, and Phase 4 made it so
+ * after finding the two collapsed here while `/api/ready` already told them
+ * apart — the same deployment could be described two different ways depending
+ * on which surface you asked.
+ *
+ * The distinction is not cosmetic. The likeliest wrong value for
+ * `STORAGE_DRIVER` is `garage`, because that IS one of the installer's storage
+ * choices — it is infrastructure reached through the s3 driver, not a driver.
+ * An operator who types it and is told "storage is not configured" goes and
+ * checks their S3 credentials, which are perfectly fine, and has no way to
+ * discover that the problem is one word in a different variable.
+ *
+ *   not_configured   nothing has been set. The normal state of a fresh install
+ *                    whose owner has not configured storage yet.
+ *   misconfigured    something WAS set and is wrong: an unknown driver name, or
+ *                    a local driver with no path.
+ *   unavailable      configuration is coherent, but the backend failed.
+ *
+ * All three still BLOCK completion. They are separate so the page can say which
+ * one it is — a state name, never a value, because this page is unauthenticated.
+ */
+export type StoragePrerequisite =
+  | "ready"
+  | "not_configured"
+  | "misconfigured"
+  | "unavailable"
 /**
  * Login CAPTCHA configuration (Phase 7.1.1).
  *
@@ -110,7 +138,7 @@ export async function checkStoragePrerequisite(): Promise<StoragePrerequisite> {
     // same — open the deployment's storage configuration — and distinguishing
     // them would mean telling an anonymous caller which one it was.
     logProbeFailure("storage upload", error)
-    return isStorageUnconfigured(error) ? "not_configured" : "unavailable"
+    return classifyStorageFailure(error)
   }
 
   try {
@@ -134,7 +162,7 @@ export async function checkStoragePrerequisite(): Promise<StoragePrerequisite> {
 }
 
 /**
- * Distinguishes "nothing is configured" from "what is configured does not work".
+ * Turns a storage failure into the state the setup page shows.
  *
  * A TYPE TEST, NOT A STRING MATCH. This used to read
  * `error.message.includes("S3 is not configured")`, which made a
@@ -142,9 +170,13 @@ export async function checkStoragePrerequisite(): Promise<StoragePrerequisite> {
  * correctly-configured Local deployment, because a Local install has no S3
  * credentials by design. It would have reported a working filesystem
  * installation as a broken S3 one and refused to let setup complete.
+ *
+ * The problem codes map exactly as `checkStorage` maps them, so the setup page
+ * and `/api/ready` can never describe the same deployment differently.
  */
-function isStorageUnconfigured(error: unknown): boolean {
-  return error instanceof StorageConfigurationError
+function classifyStorageFailure(error: unknown): StoragePrerequisite {
+  if (!(error instanceof StorageConfigurationError)) return "unavailable"
+  return error.problem === "s3_incomplete" ? "not_configured" : "misconfigured"
 }
 
 /**

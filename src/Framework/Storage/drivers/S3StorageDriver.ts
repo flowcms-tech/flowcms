@@ -6,7 +6,7 @@ import {
   DeleteObjectsCommand,
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3"
-import { getS3Connection, type S3Connection } from "./s3Client"
+import { getS3Connection as activeS3Connection, type S3Connection } from "./s3Client"
 import { StorageObjectNotFoundError } from "../StorageErrors"
 import type { DirectoryListing, StorageDriver, StorageObjectSummary } from "../StorageDriver"
 
@@ -154,7 +154,21 @@ async function deleteAllUnderPrefix(
   }
 }
 
-export const S3StorageDriver: StorageDriver = {
+/**
+ * An S3 driver bound to a particular connection.
+ *
+ * PARAMETERISED IN PHASE 4. It used to resolve `getS3Connection()` — the
+ * ACTIVE bucket — inside every method, which is right for serving requests and
+ * useless for a migration: copying to a destination means talking to a bucket
+ * that is deliberately NOT the active one, and testing a destination means
+ * doing so before anything has been made active at all.
+ *
+ * The exported `S3StorageDriver` below is this factory bound to the active
+ * connection, so nothing about the serving path changed.
+ */
+export function createS3StorageDriver(connect: () => Promise<S3Connection>): StorageDriver {
+  const getS3Connection = connect
+  return {
   name: "s3",
 
   async uploadObject(key, body, contentType) {
@@ -239,6 +253,36 @@ export const S3StorageDriver: StorageDriver = {
     await deleteAllUnderPrefix(await getS3Connection(), prefix)
   },
 
+  async *scanEntries(options) {
+    const { client, bucket } = await getS3Connection()
+
+    // `StartAfter` is S3's own resume token and is exclusive, which is what
+    // makes resuming from "the last key I finished" correct rather than
+    // off-by-one. Pages are yielded as they arrive, so nothing accumulates.
+    let continuationToken: string | undefined
+    do {
+      const res = await client.send(
+        new ListObjectsV2Command({
+          Bucket: bucket,
+          ContinuationToken: continuationToken,
+          StartAfter: continuationToken ? undefined : options?.after,
+        }),
+      )
+      for (const obj of res.Contents ?? []) {
+        if (!obj.Key) continue
+        yield {
+          key: obj.Key,
+          // The folder-marker convention: a zero-byte object whose key ends in
+          // a slash is how an empty folder exists at all on S3.
+          kind: obj.Key.endsWith("/") ? ("directory" as const) : ("file" as const),
+          size: obj.Size ?? 0,
+          lastModified: obj.LastModified ?? new Date(0),
+        }
+      }
+      continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined
+    } while (continuationToken)
+  },
+
   async copyObject(oldKey, newKey) {
     const { client, bucket } = await getS3Connection()
     await client.send(
@@ -279,5 +323,13 @@ export const S3StorageDriver: StorageDriver = {
     await copyAllUnderPrefix(connection, oldPrefix, newPrefix)
     await deleteAllUnderPrefix(connection, oldPrefix)
   },
-
+  }
 }
+
+/**
+ * The driver that serves requests: bound to the ACTIVE bucket.
+ *
+ * Resolved per call inside each method, exactly as before, so an admin changing
+ * credentials is served by the next request rather than the next restart.
+ */
+export const S3StorageDriver: StorageDriver = createS3StorageDriver(activeS3Connection)
