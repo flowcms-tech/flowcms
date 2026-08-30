@@ -14,8 +14,11 @@
  * each backend answer with its own best implementation instead of forcing the
  * S3 shape onto everything.
  *
- * WHAT IS DELIBERATELY NOT IN HERE: anything that only S3 can do. See
- * `getPresignedDownloadUrl` below.
+ * WHAT IS DELIBERATELY NOT IN HERE: anything only one backend can do. S3
+ * presigning used to hang off this interface as an optional member; Phase 2
+ * removed it, because once every caller reads through an application route
+ * there is no generic consumer left and an optional capability that nothing
+ * uses is just a leak of one vendor's model into a shared contract.
  */
 
 /** One stored object, as the File Manager needs to render it. */
@@ -48,7 +51,7 @@ export interface DirectoryListing {
  * an application behaviour, and there would then be a code path that only ever
  * runs on one vendor.
  */
-export type StorageDriverName = "s3"
+export type StorageDriverName = "s3" | "local"
 
 export interface StorageDriver {
   /** Identifies the backend in errors and diagnostics. */
@@ -71,45 +74,4 @@ export interface StorageDriver {
   renameObject(oldKey: string, newKey: string): Promise<void>
   copyPrefix(oldPrefix: string, newPrefix: string): Promise<void>
   renamePrefix(oldPrefix: string, newPrefix: string): Promise<void>
-
-  /**
-   * OPTIONAL, AND NAMED FOR WHAT IT ACTUALLY IS.
-   *
-   * This is not a generic "give me a URL" method wearing an S3 name — it is
-   * genuinely S3 presigning, and it is optional because a filesystem backend
-   * has nothing to sign. Calling it produces a URL that points AT THE OBJECT
-   * STORE and carries an `X-Amz-Signature`; today the browser loads that URL
-   * directly for every File Manager thumbnail and admin-side image.
-   *
-   * The honest alternative was to rename it to something provider-neutral now.
-   * That was rejected for this phase: the name would have promised a
-   * capability no code implements yet, and a caller reading `getReadUrl` would
-   * reasonably assume it works on any driver. An optional member says the true
-   * thing — some backends can do this, some cannot — and it makes the callers
-   * that depend on presigning findable, because they are exactly the ones that
-   * have to handle its absence.
-   *
-   * Generalising this into a provider-neutral read URL is the next phase's
-   * work, and it is a behaviour change with its own consequences (a proxied
-   * route means bytes flow through the application), which is why it is not
-   * smuggled in under a rename here.
-   */
-  getPresignedDownloadUrl?(key: string, expiresInSeconds?: number): Promise<string>
-}
-
-/**
- * Raised when a caller needs presigning and the active driver has none.
- *
- * A distinct type rather than a bare `Error` because the callers that will have
- * to handle it — thumbnails, OG images, the admin layout's logo — each want a
- * different fallback, and `catch` needs something to discriminate on. Nothing
- * throws it today: with `s3` the only driver, the capability is always present.
- * It exists so that the phase which adds a driver without presigning finds a
- * defined failure mode instead of `undefined is not a function`.
- */
-export class StoragePresigningUnsupportedError extends Error {
-  constructor(driverName: string) {
-    super(`The "${driverName}" storage driver cannot produce presigned URLs.`)
-    this.name = "StoragePresigningUnsupportedError"
-  }
 }

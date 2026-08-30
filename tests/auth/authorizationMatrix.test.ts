@@ -85,6 +85,12 @@ describe("contributor — the least-privileged role", () => {
     "captcha",
     "dashboard",
     "file-manager",
+    // Reads the bytes of a stored object for a signed-in user. Same floor as
+    // browsing the File Manager, because this is what renders the thumbnails a
+    // contributor picks a featured image from. It replaced presigned URLs,
+    // which bypassed this matrix entirely by handing the browser a URL that
+    // fetched the object store directly, with no role check anywhere.
+    "media/[...key]",
     // Container probes, public by necessity — an orchestrator has no session.
     // They appear here because "reachable by a contributor" includes every
     // public route, not because a contributor is granted anything by them:
@@ -135,6 +141,12 @@ describe("contributor — the least-privileged role", () => {
   it("may upload media but never delete or move it", () => {
     expect(allows("file-manager", "GET", "contributor")).toBe(true)
     expect(allows("file-manager", "POST", "contributor")).toBe(true)
+    // Reading an object's bytes goes through /api/media, at the same floor.
+    expect(allows("media/[...key]", "GET", "contributor")).toBe(true)
+    // But an anonymous caller must NOT reach it. Anonymous image reads are
+    // /api/public/images only, which authorises a key solely because published
+    // content refers to it.
+    expect(allows("media/[...key]", "GET", null)).toBe(false)
     for (const pattern of [
       "file-manager/file",
       "file-manager/file/copy",

@@ -6,8 +6,8 @@ import {
   DeleteObjectsCommand,
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3"
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 import { getS3Connection, type S3Connection } from "./s3Client"
+import { StorageObjectNotFoundError } from "../StorageErrors"
 import type { DirectoryListing, StorageDriver, StorageObjectSummary } from "../StorageDriver"
 
 /**
@@ -25,6 +25,23 @@ import type { DirectoryListing, StorageDriver, StorageObjectSummary } from "../S
  * operator can move from Garage to R2 by editing five environment variables
  * stops being keepable.
  */
+
+/**
+ * Whether an SDK error means "that key is not there".
+ *
+ * Two spellings, because providers disagree: AWS raises `NoSuchKey`, while
+ * MinIO and several others raise `NotFound`. The HTTP status is checked as well
+ * so a provider using a third name still lands in the right branch.
+ */
+function isMissingObject(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false
+  const named = error as { name?: string; $metadata?: { httpStatusCode?: number } }
+  return (
+    named.name === "NoSuchKey" ||
+    named.name === "NotFound" ||
+    named.$metadata?.httpStatusCode === 404
+  )
+}
 
 /** Rows from a `ListObjectsV2` response, in FlowCMS's own vocabulary. */
 function toSummaries(contents: { Key?: string; Size?: number; LastModified?: Date }[]): StorageObjectSummary[] {
@@ -51,6 +68,40 @@ function copySourceFor(bucket: string, key: string): string {
 }
 
 /**
+ * Every page of a listing, followed to the end.
+ *
+ * `ListObjectsV2` caps a response at 1000 keys and reports `IsTruncated`. Every
+ * listing in this driver goes through here so that no caller can accidentally
+ * read only the first page — which is precisely what `listObjects` and
+ * `listDirectory` used to do, silently truncating any folder past a thousand
+ * objects with no error and no sign in the UI.
+ *
+ * `IsTruncated` IS THE AUTHORITY, not the presence of a token. A provider that
+ * echoes a stale `NextContinuationToken` on its final page would otherwise put
+ * this in an endless loop.
+ */
+async function* listPages(
+  client: S3Connection["client"],
+  bucket: string,
+  prefix: string | undefined,
+  delimiter?: string,
+) {
+  let continuationToken: string | undefined
+  do {
+    const res = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        Delimiter: delimiter,
+        ContinuationToken: continuationToken,
+      }),
+    )
+    yield res
+    continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined
+  } while (continuationToken)
+}
+
+/**
  * Copies every object under one prefix to another, preserving relative paths.
  *
  * Takes the connection rather than resolving its own, so a `renamePrefix`
@@ -62,16 +113,8 @@ async function copyAllUnderPrefix(
   oldPrefix: string,
   newPrefix: string,
 ): Promise<void> {
-  let continuationToken: string | undefined
-  do {
-    const res = await client.send(
-      new ListObjectsV2Command({
-        Bucket: bucket,
-        Prefix: oldPrefix,
-        ContinuationToken: continuationToken,
-      }),
-    )
-    const keys = (res.Contents ?? [])
+  for await (const page of listPages(client, bucket, oldPrefix)) {
+    const keys = (page.Contents ?? [])
       .map((obj) => obj.Key)
       .filter((key): key is string => Boolean(key))
 
@@ -87,9 +130,7 @@ async function copyAllUnderPrefix(
         )
       }),
     )
-
-    continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined
-  } while (continuationToken)
+  }
 }
 
 /** Deletes everything under a prefix, in batches, on an existing connection. */
@@ -97,16 +138,8 @@ async function deleteAllUnderPrefix(
   { client, bucket }: S3Connection,
   prefix: string,
 ): Promise<void> {
-  let continuationToken: string | undefined
-  do {
-    const res = await client.send(
-      new ListObjectsV2Command({
-        Bucket: bucket,
-        Prefix: prefix,
-        ContinuationToken: continuationToken,
-      }),
-    )
-    const keys = (res.Contents ?? [])
+  for await (const page of listPages(client, bucket, prefix)) {
+    const keys = (page.Contents ?? [])
       .map((obj) => obj.Key)
       .filter((key): key is string => Boolean(key))
 
@@ -118,9 +151,7 @@ async function deleteAllUnderPrefix(
         }),
       )
     }
-
-    continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined
-  } while (continuationToken)
+  }
 }
 
 export const S3StorageDriver: StorageDriver = {
@@ -140,7 +171,17 @@ export const S3StorageDriver: StorageDriver = {
 
   async downloadObject(key) {
     const { client, bucket } = await getS3Connection()
-    const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }))
+    let res
+    try {
+      res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }))
+    } catch (error) {
+      // Translated so callers need one vocabulary instead of two. Everything
+      // else — AccessDenied above all — is rethrown untouched: reporting a
+      // credentials problem as "missing" would send an operator looking for a
+      // file that is sitting right there.
+      if (isMissingObject(error)) throw new StorageObjectNotFoundError(key)
+      throw error
+    }
     const bytes = await res.Body!.transformToByteArray()
     return Buffer.from(bytes)
   },
@@ -152,22 +193,36 @@ export const S3StorageDriver: StorageDriver = {
 
   async listObjects(prefix) {
     const { client, bucket } = await getS3Connection()
-    const res = await client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix }))
-    return toSummaries(res.Contents ?? [])
+    const found: StorageObjectSummary[] = []
+
+    for await (const page of listPages(client, bucket, prefix)) {
+      found.push(...toSummaries(page.Contents ?? []))
+    }
+    return found
   },
 
   async listDirectory(prefix = ""): Promise<DirectoryListing> {
     const { client, bucket } = await getS3Connection()
-    const res = await client.send(
-      new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, Delimiter: "/" }),
-    )
-    const directories = (res.CommonPrefixes ?? [])
-      .map((cp) => cp.Prefix)
-      .filter((p): p is string => Boolean(p))
-    // `obj.Key !== prefix` drops the folder's own marker object, which would
-    // otherwise appear as a zero-byte file inside itself.
-    const files = toSummaries((res.Contents ?? []).filter((obj) => obj.Key && obj.Key !== prefix))
-    return { directories, files }
+
+    // A Set, because a `CommonPrefix` may in principle be reported on more than
+    // one page. Insertion order is preserved, so the result still arrives in
+    // S3's own binary key order.
+    const directories = new Set<string>()
+    const files: StorageObjectSummary[] = []
+
+    for await (const page of listPages(client, bucket, prefix, "/")) {
+      for (const cp of page.CommonPrefixes ?? []) {
+        if (cp.Prefix) directories.add(cp.Prefix)
+      }
+      // `obj.Key !== prefix` drops the folder's own marker object, which would
+      // otherwise appear as a zero-byte file inside itself. Applied per page:
+      // the marker is not guaranteed to land on the first one.
+      files.push(
+        ...toSummaries((page.Contents ?? []).filter((obj) => obj.Key && obj.Key !== prefix)),
+      )
+    }
+
+    return { directories: [...directories], files }
   },
 
   async createDirectory(prefix) {
@@ -225,9 +280,4 @@ export const S3StorageDriver: StorageDriver = {
     await deleteAllUnderPrefix(connection, oldPrefix)
   },
 
-  async getPresignedDownloadUrl(key, expiresInSeconds = 3600) {
-    const { client, bucket } = await getS3Connection()
-    const command = new GetObjectCommand({ Bucket: bucket, Key: key })
-    return getSignedUrl(client, command, { expiresIn: expiresInSeconds })
-  },
 }

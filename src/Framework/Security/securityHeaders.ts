@@ -36,13 +36,21 @@ export type CspMode = "enforce" | "report-only" | "off"
  * body, and the content it produces carries `style` attributes that the public
  * post renderer emits. Removing it breaks the editor and every existing post.
  *
- * `img-src https:`: images are served as presigned URLs pointing at whichever
- * S3-compatible endpoint the operator configured. That endpoint is runtime
- * config — it can be changed in Admin > Settings without a rebuild — so it
- * cannot be enumerated in a build-time header.
+ * `img-src https:`: THE ORIGINAL REASON IS GONE, THE DIRECTIVE IS NOT.
  *
- * `connect-src` includes `https:` for the same reason: the browser fetches
- * images and media straight from the configured bucket.
+ * This used to read "images are served as presigned URLs pointing at whichever
+ * S3-compatible endpoint the operator configured". That stopped being true in
+ * Phase 2: FlowCMS's own images now come from `/api/media` and
+ * `/api/public/images`, both same-origin, which `'self'` already covers.
+ *
+ * `https:` stays because of CONTENT, not storage. An author can paste or embed
+ * an image hosted anywhere into a post body, and the public renderer emits that
+ * `<img>` verbatim. Narrowing this to `'self'` would blank those images on
+ * every published post, so it is a content decision an operator should make,
+ * not a side effect of changing where FlowCMS keeps its files.
+ *
+ * `connect-src https:` is in the same position — its storage justification is
+ * likewise obsolete, and it is left alone here rather than tightened blind.
  */
 export const CSP_DIRECTIVES: Record<string, string> = {
   "default-src": "'self'",

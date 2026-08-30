@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { eq } from "drizzle-orm"
 import { db } from "@/db/client"
 import { customPages } from "@/db/tables"
-import { StorageService } from "@/Framework/Storage/StorageService"
+import { mediaPath } from "@/Framework/Storage/mediaUrl"
 import { sanitizePostContent } from "@/Framework/Functions/sanitizePostContent"
 import { updatePageSchema } from "@/Modules/Pages/Values/Validations"
 import { upsertRedirectWithFlattening } from "@/db/redirectMaintenance"
@@ -12,13 +12,11 @@ import { PAGE_FIELD_LABELS } from "@/Framework/Activity/fieldLabels"
 import { requireApiAuth } from "@/Framework/Auth/apiAuth"
 import { updateReturning } from "@/db/writes"
 
-const IMAGE_URL_TTL_SECONDS = 3600
-
 type PageRow = typeof customPages.$inferSelect
 
 async function serializePage(row: PageRow) {
   const ogImageUrl = row.ogImageKey
-    ? await StorageService.getPresignedDownloadUrl(row.ogImageKey, IMAGE_URL_TTL_SECONDS)
+    ? mediaPath(row.ogImageKey)
     : null
 
   return {

@@ -65,8 +65,9 @@ export const SETUP_PROBE_PREFIX = ".flowcms-setup-check/"
  * path the File Manager uses, which is the same reasoning
  * `docker/storage-roundtrip.test.ts` was built on.
  *
- * Presigning is deliberately not exercised: nothing in setup needs it, and the
- * check should be the smallest thing that proves the claim.
+ * Presigning is not exercised because it no longer exists: Phase 2 removed it
+ * from the storage contract entirely. The check is the smallest thing that
+ * proves the claim.
  *
  * The object is deleted and the delete is verified. A probe that leaves litter
  * in a production bucket every time an operator reloads the setup page is a

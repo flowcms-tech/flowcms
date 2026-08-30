@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { StorageObjectNotFoundError } from "@/Framework/Storage/StorageErrors"
 import {
   CopyObjectCommand,
   DeleteObjectCommand,
@@ -95,10 +96,6 @@ describe("the registered driver", () => {
     const driver = await resolveStorageDriver()
 
     expect(driver.name).toBe("s3")
-    // S3 can presign, so the optional member must actually be present —
-    // without it every admin thumbnail would throw
-    // StoragePresigningUnsupportedError.
-    expect(typeof driver.getPresignedDownloadUrl).toBe("function")
   })
 })
 
@@ -182,6 +179,45 @@ describe("downloadObject", () => {
   })
 })
 
+describe("downloadObject reports a missing key the same way every backend does", () => {
+  it("maps NoSuchKey onto StorageObjectNotFoundError", async () => {
+    // Without this the preview route has to know that "missing" is spelled
+    // `NoSuchKey` on S3 and `ENOENT` on a filesystem, and would have to tell
+    // them apart to decide between 404 and 500.
+    const noSuchKey = Object.assign(new Error("The specified key does not exist."), {
+      name: "NoSuchKey",
+    })
+    send.mockRejectedValue(noSuchKey)
+
+    await expect(StorageService.downloadObject("gone.png")).rejects.toBeInstanceOf(
+      StorageObjectNotFoundError,
+    )
+  })
+
+  it("maps a 404 status onto the same error", async () => {
+    // MinIO and some other S3-compatible servers answer with `NotFound` rather
+    // than `NoSuchKey`, so the HTTP status is checked too.
+    send.mockRejectedValue(
+      Object.assign(new Error("Not Found"), {
+        name: "NotFound",
+        $metadata: { httpStatusCode: 404 },
+      }),
+    )
+
+    await expect(StorageService.downloadObject("gone.png")).rejects.toBeInstanceOf(
+      StorageObjectNotFoundError,
+    )
+  })
+
+  it("does not disguise a real failure as a missing object", async () => {
+    // AccessDenied means the credentials are wrong; answering 404 would send an
+    // operator hunting for a file that is right there.
+    send.mockRejectedValue(Object.assign(new Error("Access Denied"), { name: "AccessDenied" }))
+
+    await expect(StorageService.downloadObject("there.png")).rejects.toThrow("Access Denied")
+  })
+})
+
 describe("deleteObject", () => {
   it("deletes exactly the one key", async () => {
     await StorageService.deleteObject("posts/a.png")
@@ -224,6 +260,127 @@ describe("listObjects", () => {
     send.mockResolvedValue({})
 
     expect(await StorageService.listObjects("posts/")).toEqual([])
+  })
+})
+
+describe("listObjects pagination", () => {
+  /**
+   * `ListObjectsV2` returns at most 1000 keys per call and sets `IsTruncated`.
+   *
+   * Before this, `listObjects` and `listDirectory` each issued ONE command and
+   * returned whatever came back — so a folder with more than 1000 objects was
+   * silently, invisibly cut short. Nothing errored; the File Manager simply
+   * showed part of a folder, and a prefix copy quietly moved part of a tree.
+   *
+   * It matters more now than it did: the local driver returns everything a
+   * directory holds, so leaving this would have given the two backends
+   * permanently different answers for the same folder.
+   */
+  function page(keys: string[], next?: string) {
+    return {
+      Contents: keys.map((Key) => ({ Key, Size: 1 })),
+      IsTruncated: Boolean(next),
+      NextContinuationToken: next,
+    }
+  }
+
+  it("follows the continuation token until the listing is complete", async () => {
+    send
+      .mockResolvedValueOnce(page(["posts/a"], "t1"))
+      .mockResolvedValueOnce(page(["posts/b"], "t2"))
+      .mockResolvedValueOnce(page(["posts/c"]))
+
+    const keys = (await StorageService.listObjects("posts/")).map((o) => o.key)
+
+    expect(keys).toEqual(["posts/a", "posts/b", "posts/c"])
+    expect(inputOf(0).ContinuationToken).toBeUndefined()
+    expect(inputOf(1).ContinuationToken).toBe("t1")
+    expect(inputOf(2).ContinuationToken).toBe("t2")
+  })
+
+  it("returns every object across more than a thousand keys", async () => {
+    const first = Array.from({ length: 1000 }, (_, i) => `posts/${String(i).padStart(4, "0")}`)
+    const second = Array.from({ length: 250 }, (_, i) => `posts/1${String(i).padStart(4, "0")}`)
+    send.mockResolvedValueOnce(page(first, "more")).mockResolvedValueOnce(page(second))
+
+    const keys = (await StorageService.listObjects("posts/")).map((o) => o.key)
+
+    expect(keys).toHaveLength(1250)
+    expect(keys[0]).toBe("posts/0000")
+    expect(keys[1249]).toBe("posts/10249")
+  })
+
+  it("stops when IsTruncated is false even if a token is echoed back", async () => {
+    // A provider that returns a stale token on the final page would otherwise
+    // loop forever. `IsTruncated` is the authority, not the token's presence.
+    send.mockResolvedValue({
+      Contents: [{ Key: "posts/a", Size: 1 }],
+      IsTruncated: false,
+      NextContinuationToken: "ignored",
+    })
+
+    expect(await StorageService.listObjects("posts/")).toHaveLength(1)
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("listDirectory pagination", () => {
+  it("accumulates folders and files across pages", async () => {
+    send
+      .mockResolvedValueOnce({
+        CommonPrefixes: [{ Prefix: "posts/a/" }],
+        Contents: [{ Key: "posts/one.png", Size: 1 }],
+        IsTruncated: true,
+        NextContinuationToken: "t1",
+      })
+      .mockResolvedValueOnce({
+        CommonPrefixes: [{ Prefix: "posts/b/" }],
+        Contents: [{ Key: "posts/two.png", Size: 1 }],
+        IsTruncated: false,
+      })
+
+    const result = await StorageService.listDirectory("posts/")
+
+    expect(result.directories).toEqual(["posts/a/", "posts/b/"])
+    expect(result.files.map((f) => f.key)).toEqual(["posts/one.png", "posts/two.png"])
+    // The delimiter has to survive on to the second page, or page two comes
+    // back recursive and every nested object appears as a file in this folder.
+    expect(inputOf(1).Delimiter).toBe("/")
+    expect(inputOf(1).ContinuationToken).toBe("t1")
+  })
+
+  it("never repeats a folder that appears on more than one page", async () => {
+    send
+      .mockResolvedValueOnce({
+        CommonPrefixes: [{ Prefix: "posts/a/" }],
+        IsTruncated: true,
+        NextContinuationToken: "t1",
+      })
+      .mockResolvedValueOnce({
+        CommonPrefixes: [{ Prefix: "posts/a/" }, { Prefix: "posts/b/" }],
+        IsTruncated: false,
+      })
+
+    const result = await StorageService.listDirectory("posts/")
+
+    expect(result.directories).toEqual(["posts/a/", "posts/b/"])
+  })
+
+  it("filters the folder's own marker on every page, not just the first", async () => {
+    send
+      .mockResolvedValueOnce({
+        Contents: [{ Key: "posts/one.png", Size: 1 }],
+        IsTruncated: true,
+        NextContinuationToken: "t1",
+      })
+      .mockResolvedValueOnce({
+        Contents: [{ Key: "posts/", Size: 0 }, { Key: "posts/two.png", Size: 1 }],
+        IsTruncated: false,
+      })
+
+    const result = await StorageService.listDirectory("posts/")
+
+    expect(result.files.map((f) => f.key)).toEqual(["posts/one.png", "posts/two.png"])
   })
 })
 
@@ -422,30 +579,31 @@ describe("renamePrefix", () => {
     expect(sentCommands().some((c) => c instanceof DeleteObjectsCommand)).toBe(false)
   })
 })
-
-describe("getPresignedDownloadUrl", () => {
-  it("signs a GetObject for the key with the requested lifetime", async () => {
-    getSignedUrl.mockResolvedValue("https://example.test/signed")
-
-    const url = await StorageService.getPresignedDownloadUrl("posts/a.png", 300)
-
-    expect(url).toBe("https://example.test/signed")
-    const [, command, options] = getSignedUrl.mock.calls[0] as [
-      unknown,
-      GetObjectCommand,
-      { expiresIn: number },
-    ]
-    expect(command).toBeInstanceOf(GetObjectCommand)
-    expect(command.input).toEqual({ Bucket: BUCKET, Key: "posts/a.png" })
-    expect(options).toEqual({ expiresIn: 300 })
+describe("presigning is gone", () => {
+  /**
+   * Phase 1 kept `getPresignedDownloadUrl` as an optional driver capability and
+   * pinned its exact behaviour here. Phase 2 removed it outright, so the
+   * characterization tests for it were removed with it — a test asserting the
+   * behaviour of something deleted is a test asserting a lie.
+   *
+   * What replaces them is the assertion that nothing can still reach it. The
+   * failure this guards against is a later phase quietly reintroducing a signed
+   * URL for convenience and putting an unreachable `http://garage:3900` host
+   * back in front of the browser.
+   */
+  it("is absent from the storage service", () => {
+    expect("getPresignedDownloadUrl" in StorageService).toBe(false)
   })
 
-  it("defaults to one hour", async () => {
-    getSignedUrl.mockResolvedValue("https://example.test/signed")
+  it("is absent from the registered driver", async () => {
+    const driver = await resolveStorageDriver()
+    expect("getPresignedDownloadUrl" in driver).toBe(false)
+  })
 
-    await StorageService.getPresignedDownloadUrl("posts/a.png")
+  it("means the presigner package is never invoked", async () => {
+    await StorageService.downloadObject("posts/a.png").catch(() => {})
+    await StorageService.listDirectory("posts/")
 
-    const [, , options] = getSignedUrl.mock.calls[0] as [unknown, unknown, { expiresIn: number }]
-    expect(options).toEqual({ expiresIn: 3600 })
+    expect(getSignedUrl).not.toHaveBeenCalled()
   })
 })

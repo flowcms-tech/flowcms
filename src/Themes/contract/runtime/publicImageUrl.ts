@@ -1,13 +1,18 @@
 /**
- * The second access path for stored images, alongside
- * `StorageService.getPresignedDownloadUrl`.
+ * The PUBLIC access path for stored images.
  *
- * Presigned URLs expire (~1 h). Googlebot, Google Images, and the
- * Facebook/LinkedIn/X scrapers revisit days or weeks later, by which time the
- * signature is dead — so anything a crawler must fetch (OG tags, JSON-LD
- * `image`, `<img src>` on a public page) has to go through here instead.
+ * Anything a crawler must fetch — OG tags, JSON-LD `image`, `<img src>` on a
+ * public page — goes through here. This route is anonymous and authorises a key
+ * only because published content refers to it.
  *
- * Admin surfaces (File Manager, post edit form) keep using presigned URLs.
+ * Admin surfaces use `/api/media` instead, which requires a session and can
+ * serve an object nothing has published yet.
+ *
+ * Both used to compete with a third path, `getPresignedDownloadUrl`, which
+ * handed the browser a signed URL pointing at the object store. Phase 2 deleted
+ * it: the signature expired within the hour (breaking exactly the crawler case
+ * this file exists for), and on the bundled-Garage deployment the URL named an
+ * internal Docker hostname the browser could not resolve at all.
  */
 export const PUBLIC_IMAGE_ROUTE_BASE = "/api/public/images"
 

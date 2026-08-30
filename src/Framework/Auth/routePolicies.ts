@@ -209,6 +209,11 @@ export const ROUTE_POLICIES: Record<string, RoutePolicy> = {
     reason:
       "Browsing and uploading media is required to give a draft a featured image. Destructive operations live on the sibling routes below and stop at editor.",
   },
+  "media/[...key]": {
+    default: "contributor",
+    reason:
+      "Serves the bytes of a stored object to a signed-in user. Same floor as browsing the File Manager, and for the same reason: this is how a contributor sees the thumbnails they pick a featured image from. It replaced presigned URLs, which handed the browser a URL pointing straight at the object store — unreachable on the bundled-Garage deployment and impossible for a filesystem backend.",
+  },
 
   // Taxonomy and author profiles: readable by anyone who fills in a post form,
   // writable only by an editor. Split by method rather than given a single

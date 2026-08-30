@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { desc, eq, inArray, isNull, isNotNull } from "drizzle-orm"
 import { db } from "@/db/client"
 import { authors, blogCategories, blogPostCategories, blogPosts, blogPostTags, blogSeries, blogTags, users } from "@/db/tables"
-import { StorageService } from "@/Framework/Storage/StorageService"
+import { mediaPath } from "@/Framework/Storage/mediaUrl"
 import { createBlogPostSchema } from "@/Modules/Blog/Posts/Values/Validations"
 import { publishDueScheduledPosts } from "@/db/blogPostScheduling"
 import { sanitizePostContent } from "@/Framework/Functions/sanitizePostContent"
@@ -19,8 +19,6 @@ import { REVIEW_STATUSES, type ReviewStatus } from "@/Modules/Blog/Posts/Values/
 import { recordActivity } from "@/db/activityLog"
 import { requireApiAuth } from "@/Framework/Auth/apiAuth"
 import { insertReturning } from "@/db/writes"
-
-const IMAGE_URL_TTL_SECONDS = 3600
 
 type PostRow = typeof blogPosts.$inferSelect
 
@@ -111,7 +109,7 @@ async function serializePosts(rows: PostRow[]) {
   return Promise.all(
     rows.map(async (row) => {
       const createdBy = adminUserById.get(row.authorId)
-      const featuredImageUrl = await StorageService.getPresignedDownloadUrl(row.featuredImageKey, IMAGE_URL_TTL_SECONDS)
+      const featuredImageUrl = mediaPath(row.featuredImageKey)
 
       return {
         id: row.id,

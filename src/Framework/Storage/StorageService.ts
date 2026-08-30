@@ -1,5 +1,4 @@
 import { resolveStorageDriver } from "./resolveStorageDriver"
-import { StoragePresigningUnsupportedError } from "./StorageDriver"
 
 /**
  * The application's storage entry point.
@@ -80,27 +79,5 @@ export const StorageService = {
   async renameObject(oldKey: string, newKey: string): Promise<void> {
     const driver = await resolveStorageDriver()
     return driver.renameObject(oldKey, newKey)
-  },
-
-  /**
-   * A presigned URL the browser can load directly from the object store.
-   *
-   * STILL S3-SHAPED, AND STILL NAMED THAT WAY. Every caller — File Manager
-   * thumbnails, the admin layout's logo, the post and page APIs — depends on
-   * getting back a URL that points at the bucket and carries an
-   * `X-Amz-Signature`, and this phase changes none of that.
-   *
-   * The driver member is optional (a filesystem backend has nothing to sign),
-   * so this refuses explicitly rather than calling `undefined`. With `s3` the
-   * only registered driver that refusal is unreachable in production; it exists
-   * so the phase that adds a driver without presigning meets a named error at a
-   * known place instead of a `TypeError` somewhere in a page render.
-   */
-  async getPresignedDownloadUrl(key: string, expiresInSeconds = 3600): Promise<string> {
-    const driver = await resolveStorageDriver()
-    if (!driver.getPresignedDownloadUrl) {
-      throw new StoragePresigningUnsupportedError(driver.name)
-    }
-    return driver.getPresignedDownloadUrl(key, expiresInSeconds)
   },
 }

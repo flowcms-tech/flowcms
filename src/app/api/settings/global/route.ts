@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/db/client"
 import { settings } from "@/db/tables"
 import { SETTINGS_SINGLETON_ID } from "@/db/schema/settings"
-import { StorageService } from "@/Framework/Storage/StorageService"
+import { mediaPath } from "@/Framework/Storage/mediaUrl"
 import {
   getSettingsRow,
   getBrand,
@@ -22,8 +22,6 @@ import { upsert } from "@/db/writes"
  *  reveals which secrets are configured and every endpoint the site talks to,
  *  which is not something an editor account needs. */
 const SETTINGS_FORBIDDEN = "Only an owner or admin can manage site settings"
-
-const IMAGE_URL_TTL_SECONDS = 3600
 
 /**
  * Reads one of the three JSON columns, returning the default rather than
@@ -65,11 +63,11 @@ async function serializeSettings() {
     logoKey: brand.logoKey,
     logoAltText: brand.logoAltText,
     logoUrl: brand.logoKey
-      ? await StorageService.getPresignedDownloadUrl(brand.logoKey, IMAGE_URL_TTL_SECONDS)
+      ? mediaPath(brand.logoKey)
       : null,
     faviconKey: brand.faviconKey,
     faviconUrl: brand.faviconKey
-      ? await StorageService.getPresignedDownloadUrl(brand.faviconKey, IMAGE_URL_TTL_SECONDS)
+      ? mediaPath(brand.faviconKey)
       : null,
     baseUrl,
     s3Endpoint: row?.s3Endpoint || process.env.S3_ENDPOINT || "",

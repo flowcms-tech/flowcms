@@ -1,8 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import {
-  StoragePresigningUnsupportedError,
-  type StorageDriver,
-} from "@/Framework/Storage/StorageDriver"
+import type { StorageDriver } from "@/Framework/Storage/StorageDriver"
 
 /**
  * The driver seam itself.
@@ -39,7 +36,6 @@ function fakeDriver(overrides: Partial<StorageDriver> = {}): StorageDriver {
     renameObject: vi.fn(async () => {}),
     copyPrefix: vi.fn(async () => {}),
     renamePrefix: vi.fn(async () => {}),
-    getPresignedDownloadUrl: vi.fn(async () => "https://example.test/signed"),
     ...overrides,
   }
 }
@@ -120,53 +116,6 @@ describe("StorageService dispatches to the resolved driver", () => {
     // message, so the facade must not wrap, replace or swallow it.
     await expect(StorageService.uploadObject("a.png", Buffer.from("x"))).rejects.toThrow(
       "S3 is not configured",
-    )
-  })
-})
-
-describe("optional presigning capability", () => {
-  it("uses the driver's presigner when it has one", async () => {
-    const getPresignedDownloadUrl = vi.fn(async () => "https://example.test/signed")
-    resolveStorageDriver.mockResolvedValue(fakeDriver({ getPresignedDownloadUrl }))
-
-    const url = await StorageService.getPresignedDownloadUrl("posts/a.png", 300)
-
-    expect(url).toBe("https://example.test/signed")
-    expect(getPresignedDownloadUrl).toHaveBeenCalledWith("posts/a.png", 300)
-  })
-
-  it("passes the one-hour default through to the driver", async () => {
-    const getPresignedDownloadUrl = vi.fn(async () => "https://example.test/signed")
-    resolveStorageDriver.mockResolvedValue(fakeDriver({ getPresignedDownloadUrl }))
-
-    await StorageService.getPresignedDownloadUrl("posts/a.png")
-
-    expect(getPresignedDownloadUrl).toHaveBeenCalledWith("posts/a.png", 3600)
-  })
-
-  it("refuses with a named error when the driver cannot presign", async () => {
-    // The failure this prevents: a driver with no presigner reaches
-    // `driver.getPresignedDownloadUrl(...)` and dies with "is not a function",
-    // thrown from inside a page render with nothing naming storage in it.
-    //
-    // Unreachable while `s3` is the only driver — which is exactly why it is
-    // tested here rather than discovered by the phase that adds the second one.
-    const driver = fakeDriver()
-    delete driver.getPresignedDownloadUrl
-    resolveStorageDriver.mockResolvedValue(driver)
-
-    await expect(StorageService.getPresignedDownloadUrl("posts/a.png")).rejects.toThrow(
-      StoragePresigningUnsupportedError,
-    )
-  })
-
-  it("names the offending driver, so the message says what to fix", async () => {
-    const driver = fakeDriver()
-    delete driver.getPresignedDownloadUrl
-    resolveStorageDriver.mockResolvedValue(driver)
-
-    await expect(StorageService.getPresignedDownloadUrl("posts/a.png")).rejects.toThrow(
-      /"s3" storage driver cannot produce presigned URLs/,
     )
   })
 })

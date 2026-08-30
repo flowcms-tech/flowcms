@@ -19,7 +19,7 @@ import { sameAsLinks } from '@/Modules/Authors/Values/AuthorValues'
  * its images through the public, presign-free image route, which only
  * serves keys already referenced by a *published* post. A draft's featured
  * image would 404 through that path. This renders from the same admin
- * payload the edit form already uses (presigned URLs, always resolvable
+ * payload the edit form already uses (/api/media URLs, always resolvable
  * regardless of publish state) instead.
  *
  * Category and tag chips are shown as plain badges, not links: the admin
@@ -147,7 +147,7 @@ export default function PostPreviewModule({ postId }: { postId: string }) {
             </header>
 
             {post.featuredImageUrl && (
-              // eslint-disable-next-line @next/next/no-img-element -- presigned admin URL, not an optimizable remote pattern
+              // eslint-disable-next-line @next/next/no-img-element -- authenticated /api/media URL, not an optimizable remote pattern
               <img
                 src={post.featuredImageUrl}
                 alt={post.featuredImageAltText ?? post.title}
@@ -183,7 +183,7 @@ export default function PostPreviewModule({ postId }: { postId: string }) {
             {fullAuthor && (
               <section className="mt-12 flex gap-4 rounded-xl border border-border p-4">
                 {fullAuthor.avatarUrl && (
-                  // eslint-disable-next-line @next/next/no-img-element -- presigned admin URL
+                  // eslint-disable-next-line @next/next/no-img-element -- authenticated /api/media URL
                   <img
                     src={fullAuthor.avatarUrl}
                     alt={fullAuthor.avatarAltText ?? fullAuthor.name}
