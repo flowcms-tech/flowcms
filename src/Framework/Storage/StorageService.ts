@@ -1,191 +1,106 @@
-import {
-  PutObjectCommand,
-  GetObjectCommand,
-  CopyObjectCommand,
-  DeleteObjectCommand,
-  DeleteObjectsCommand,
-  ListObjectsV2Command,
-} from "@aws-sdk/client-s3"
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
-import { getS3Client, getS3Bucket } from "./s3Client"
+import { resolveStorageDriver } from "./resolveStorageDriver"
+import { StoragePresigningUnsupportedError } from "./StorageDriver"
 
-export interface StorageObjectSummary {
-  key: string
-  size: number
-  lastModified: Date
-}
+/**
+ * The application's storage entry point.
+ *
+ * This file used to be the S3 implementation: every method built an
+ * `@aws-sdk/client-s3` command inline, so a generic name sat on top of one
+ * vendor's protocol. The AWS SDK now lives in `drivers/S3StorageDriver.ts` and
+ * this is a dispatcher — it holds no protocol knowledge and imports no SDK.
+ *
+ * THE PUBLIC SURFACE IS UNCHANGED, deliberately. Around thirty call sites reach
+ * storage through `StorageService.<method>`, and a refactor that also renamed
+ * them would have buried the one question worth answering — did the behaviour
+ * change? — under a diff nobody could read. Method names, argument order,
+ * return types and thrown errors are all exactly what they were.
+ *
+ * IT REMAINS A PLAIN OBJECT LITERAL, not a class instance. `vi.spyOn` needs own,
+ * writable properties, and `tests/setup/prerequisites.test.ts` stubs
+ * `uploadObject`, `downloadObject` and `deleteObject` on it to drive the
+ * first-run storage probe without a bucket.
+ */
 
-export interface DirectoryListing {
-  directories: string[]
-  files: StorageObjectSummary[]
-}
-
-async function copyAllUnderPrefix(oldPrefix: string, newPrefix: string): Promise<void> {
-  const client = await getS3Client()
-  const bucket = await getS3Bucket()
-
-  let continuationToken: string | undefined
-  do {
-    const res = await client.send(
-      new ListObjectsV2Command({
-        Bucket: bucket,
-        Prefix: oldPrefix,
-        ContinuationToken: continuationToken,
-      })
-    )
-    const keys = (res.Contents ?? [])
-      .map((obj) => obj.Key)
-      .filter((key): key is string => Boolean(key))
-
-    await Promise.all(
-      keys.map((oldKey) => {
-        const newKey = `${newPrefix}${oldKey.slice(oldPrefix.length)}`
-        return client.send(
-          new CopyObjectCommand({
-            Bucket: bucket,
-            CopySource: encodeURIComponent(`${bucket}/${oldKey}`),
-            Key: newKey,
-          })
-        )
-      })
-    )
-
-    continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined
-  } while (continuationToken)
-}
+// Re-exported from their new home so importers of these types keep working:
+// they describe FlowCMS's storage vocabulary, not S3's, and they now belong
+// with the contract rather than with one implementation of it.
+export type { StorageObjectSummary, DirectoryListing } from "./StorageDriver"
 
 export const StorageService = {
   async uploadObject(key: string, body: Buffer | Uint8Array, contentType?: string): Promise<void> {
-    const client = await getS3Client()
-    const bucket = await getS3Bucket()
-    await client.send(
-      new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        Body: body,
-        ContentType: contentType,
-      })
-    )
+    const driver = await resolveStorageDriver()
+    return driver.uploadObject(key, body, contentType)
   },
 
   async downloadObject(key: string): Promise<Buffer> {
-    const client = await getS3Client()
-    const bucket = await getS3Bucket()
-    const res = await client.send(
-      new GetObjectCommand({ Bucket: bucket, Key: key })
-    )
-    const bytes = await res.Body!.transformToByteArray()
-    return Buffer.from(bytes)
+    const driver = await resolveStorageDriver()
+    return driver.downloadObject(key)
   },
 
   async deleteObject(key: string): Promise<void> {
-    const client = await getS3Client()
-    const bucket = await getS3Bucket()
-    await client.send(
-      new DeleteObjectCommand({ Bucket: bucket, Key: key })
-    )
+    const driver = await resolveStorageDriver()
+    return driver.deleteObject(key)
   },
 
-  async listObjects(prefix?: string): Promise<StorageObjectSummary[]> {
-    const client = await getS3Client()
-    const bucket = await getS3Bucket()
-    const res = await client.send(
-      new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix })
-    )
-    return (res.Contents ?? []).map((obj) => ({
-      key: obj.Key!,
-      size: obj.Size ?? 0,
-      lastModified: obj.LastModified ?? new Date(0),
-    }))
+  async listObjects(prefix?: string) {
+    const driver = await resolveStorageDriver()
+    return driver.listObjects(prefix)
   },
 
-  async listDirectory(prefix: string = ""): Promise<DirectoryListing> {
-    const client = await getS3Client()
-    const bucket = await getS3Bucket()
-    const res = await client.send(
-      new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, Delimiter: "/" })
-    )
-    const directories = (res.CommonPrefixes ?? [])
-      .map((cp) => cp.Prefix)
-      .filter((p): p is string => Boolean(p))
-    const files = (res.Contents ?? [])
-      .filter((obj) => obj.Key && obj.Key !== prefix)
-      .map((obj) => ({
-        key: obj.Key!,
-        size: obj.Size ?? 0,
-        lastModified: obj.LastModified ?? new Date(0),
-      }))
-    return { directories, files }
+  async listDirectory(prefix: string = "") {
+    const driver = await resolveStorageDriver()
+    return driver.listDirectory(prefix)
   },
 
   async createDirectory(prefix: string): Promise<void> {
-    const client = await getS3Client()
-    const bucket = await getS3Bucket()
-    await client.send(
-      new PutObjectCommand({ Bucket: bucket, Key: prefix, Body: Buffer.alloc(0) })
-    )
+    const driver = await resolveStorageDriver()
+    return driver.createDirectory(prefix)
   },
 
   async deletePrefix(prefix: string): Promise<void> {
-    const client = await getS3Client()
-    const bucket = await getS3Bucket()
-
-    let continuationToken: string | undefined
-    do {
-      const res = await client.send(
-        new ListObjectsV2Command({
-          Bucket: bucket,
-          Prefix: prefix,
-          ContinuationToken: continuationToken,
-        })
-      )
-      const keys = (res.Contents ?? [])
-        .map((obj) => obj.Key)
-        .filter((key): key is string => Boolean(key))
-
-      if (keys.length > 0) {
-        await client.send(
-          new DeleteObjectsCommand({
-            Bucket: bucket,
-            Delete: { Objects: keys.map((Key) => ({ Key })) },
-          })
-        )
-      }
-
-      continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined
-    } while (continuationToken)
+    const driver = await resolveStorageDriver()
+    return driver.deletePrefix(prefix)
   },
 
   async renamePrefix(oldPrefix: string, newPrefix: string): Promise<void> {
-    await copyAllUnderPrefix(oldPrefix, newPrefix)
-    await StorageService.deletePrefix(oldPrefix)
+    const driver = await resolveStorageDriver()
+    return driver.renamePrefix(oldPrefix, newPrefix)
   },
 
   async copyPrefix(oldPrefix: string, newPrefix: string): Promise<void> {
-    await copyAllUnderPrefix(oldPrefix, newPrefix)
+    const driver = await resolveStorageDriver()
+    return driver.copyPrefix(oldPrefix, newPrefix)
   },
 
   async copyObject(oldKey: string, newKey: string): Promise<void> {
-    const client = await getS3Client()
-    const bucket = await getS3Bucket()
-    await client.send(
-      new CopyObjectCommand({
-        Bucket: bucket,
-        CopySource: encodeURIComponent(`${bucket}/${oldKey}`),
-        Key: newKey,
-      })
-    )
+    const driver = await resolveStorageDriver()
+    return driver.copyObject(oldKey, newKey)
   },
 
   async renameObject(oldKey: string, newKey: string): Promise<void> {
-    await StorageService.copyObject(oldKey, newKey)
-    await StorageService.deleteObject(oldKey)
+    const driver = await resolveStorageDriver()
+    return driver.renameObject(oldKey, newKey)
   },
 
+  /**
+   * A presigned URL the browser can load directly from the object store.
+   *
+   * STILL S3-SHAPED, AND STILL NAMED THAT WAY. Every caller — File Manager
+   * thumbnails, the admin layout's logo, the post and page APIs — depends on
+   * getting back a URL that points at the bucket and carries an
+   * `X-Amz-Signature`, and this phase changes none of that.
+   *
+   * The driver member is optional (a filesystem backend has nothing to sign),
+   * so this refuses explicitly rather than calling `undefined`. With `s3` the
+   * only registered driver that refusal is unreachable in production; it exists
+   * so the phase that adds a driver without presigning meets a named error at a
+   * known place instead of a `TypeError` somewhere in a page render.
+   */
   async getPresignedDownloadUrl(key: string, expiresInSeconds = 3600): Promise<string> {
-    const client = await getS3Client()
-    const bucket = await getS3Bucket()
-    const command = new GetObjectCommand({ Bucket: bucket, Key: key })
-    return getSignedUrl(client, command, { expiresIn: expiresInSeconds })
+    const driver = await resolveStorageDriver()
+    if (!driver.getPresignedDownloadUrl) {
+      throw new StoragePresigningUnsupportedError(driver.name)
+    }
+    return driver.getPresignedDownloadUrl(key, expiresInSeconds)
   },
 }
