@@ -1,5 +1,6 @@
 import { getSettingsRow, getS3Config } from "@/Framework/Settings/SettingsService"
 import { pinActiveStorage } from "./activeStorageStore"
+import { StorageConfigurationError } from "./StorageErrors"
 import {
   getEnvironmentStorageConfig,
   storageLocationId,
@@ -96,17 +97,48 @@ export async function getActiveStorageConfig(): Promise<ResolvedStorageConfig> {
   // every one of those cases the environment IS what it is using.
   const config = await getEnvironmentStorageConfig()
 
-  if (row?.setupCompletedAt) {
-    // The installation is real and is using this. Write it down.
-    //
-    // BEST EFFORT, AND DELIBERATELY SO. This is a side effect on a read path;
-    // a database hiccup must not take storage down with it. If it fails, the
-    // next call tries again, and until it succeeds behaviour is exactly what it
-    // was before — the environment.
-    await pinActiveStorage(config).catch(() => {})
+  if (!row?.setupCompletedAt) {
+    // Still being installed. The environment IS what this deployment is using,
+    // and an operator part-way through setup is still choosing — pinning here
+    // would refuse their first real configuration edit as a relocation.
+    return config
   }
 
-  return config
+  // The installation is real and is using this. RECORD IT, DURABLY.
+  //
+  // NOT BEST-EFFORT, and the Phase 4 checkpoint had that wrong. Swallowing a
+  // failed pin quietly reopens the exact hole the snapshot exists to close: a
+  // completed installation whose write keeps failing would run indefinitely on
+  // mutable environment topology while believing itself protected, and an
+  // environment edit during that window would relocate it silently.
+  try {
+    await pinActiveStorage(config)
+  } catch (error) {
+    throw new StorageConfigurationError(
+      "active_topology_unavailable",
+      "FlowCMS could not record which storage location is in use, so it will not serve storage " +
+        "until it can. This is usually a database problem; it resolves itself once the database " +
+        "is reachable.",
+      { cause: error },
+    )
+  }
+
+  // RE-READ, because the pin is a conditional UPDATE and may have matched
+  // nothing: two requests arriving together on a freshly-completed
+  // installation both see no snapshot, and only one of them writes. The loser
+  // must adopt what was actually persisted rather than carry on with what it
+  // resolved from the environment — otherwise the two requests would disagree
+  // about where files live for the rest of their lifetimes.
+  const pinned = (await getSettingsRow()) as ActiveTopologyRow | null
+  if (isPinned(pinned)) return fromSnapshot(pinned!)
+
+  // The write reported success and the row still has no snapshot. Something is
+  // wrong that guessing cannot fix, so this refuses rather than falling back to
+  // the environment.
+  throw new StorageConfigurationError(
+    "active_topology_unavailable",
+    "FlowCMS could not confirm which storage location is in use.",
+  )
 }
 
 /**

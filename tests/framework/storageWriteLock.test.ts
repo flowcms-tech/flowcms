@@ -20,14 +20,16 @@ import type { StorageDriver } from "@/Framework/Storage/StorageDriver"
  * without gating it fails here.
  */
 
-const isStorageWriteLocked = vi.fn()
+const verdict = vi.fn()
 vi.mock("@/Framework/Storage/storageWriteLock", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/Framework/Storage/storageWriteLock")>()
   return {
     ...actual,
-    isStorageWriteLocked: () => isStorageWriteLocked(),
+    checkStorageWriteVerdict: () => verdict(),
     assertStorageWritable: async () => {
-      if (await isStorageWriteLocked()) throw new actual.StorageWriteLockedError()
+      const v = await verdict()
+      if (v === "writable") return
+      throw new actual.StorageWriteLockedError(v)
     },
   }
 })
@@ -56,6 +58,9 @@ function fakeDriver(): StorageDriver {
     // Streaming scan. Not exercised by this file; present because the
     // contract requires it.
     scanEntries: async function* () {},
+    // Bounded-memory read seam. Not exercised by this file; present because
+    // the contract requires it.
+    openReadStream: async () => (async function* () {})(),
   }
 }
 
@@ -64,7 +69,7 @@ let driver: StorageDriver
 beforeEach(() => {
   driver = fakeDriver()
   resolveStorageDriver.mockReset().mockResolvedValue(driver)
-  isStorageWriteLocked.mockReset().mockResolvedValue(false)
+  verdict.mockReset().mockResolvedValue("writable")
 })
 
 /** Everything that CHANGES stored bytes. All of these must be gated. */
@@ -94,7 +99,7 @@ function call(method: string, args: unknown[]) {
 
 describe("while a cutover holds the lock", () => {
   beforeEach(() => {
-    isStorageWriteLocked.mockResolvedValue(true)
+    verdict.mockResolvedValue("locked")
   })
 
   it.each(MUTATIONS)("$method is refused", async ({ method, args }) => {
@@ -133,6 +138,43 @@ describe("while a cutover holds the lock", () => {
   })
 })
 
+describe("when the lock state cannot be read", () => {
+  beforeEach(() => {
+    // A database failure. The Phase 4 checkpoint failed OPEN here, letting
+    // mutations through — and the one moment this answer matters most is a
+    // cutover, which is writing to the database throughout. "I could not tell"
+    // and "a cutover is running" must be treated the same.
+    verdict.mockResolvedValue("unknown")
+  })
+
+  it.each(MUTATIONS)("$method is refused", async ({ method, args }) => {
+    await expect(call(method, args)).rejects.toBeInstanceOf(StorageWriteLockedError)
+  })
+
+  it.each(MUTATIONS)("$method never reaches the driver", async ({ method, args }) => {
+    await call(method, args).catch(() => {})
+    expect(driver[method as keyof StorageDriver]).not.toHaveBeenCalled()
+  })
+
+  it.each(READS)("$method still works", async ({ method, args }) => {
+    // Reads are untouched, so the public site keeps serving images even while
+    // the database is unreachable and writes are declining.
+    await expect(call(method, args)).resolves.toBeDefined()
+  })
+
+  it("distinguishes 'could not tell' from 'a cutover is running'", async () => {
+    const error = await StorageService.uploadObject("a.png", Buffer.from("x")).catch((e) => e)
+
+    expect((error as { verdict: string }).verdict).toBe("unknown")
+    expect((error as Error).message).toMatch(/could not confirm/i)
+  })
+
+  it("still tells a client to retry rather than fail outright", async () => {
+    const error = await StorageService.uploadObject("a.png", Buffer.from("x")).catch((e) => e)
+    expect((error as { retryAfterSeconds: number }).retryAfterSeconds).toBeGreaterThan(0)
+  })
+})
+
 describe("when no cutover is running", () => {
   it.each([...MUTATIONS, ...READS])("$method passes through", async ({ method, args }) => {
     await call(method, args)
@@ -146,13 +188,13 @@ describe("when no cutover is running", () => {
     // `renamePrefix` is one logical mutation even though the S3 driver issues
     // many requests underneath. Gating per driver request would multiply the
     // cost for no extra safety.
-    expect(isStorageWriteLocked).toHaveBeenCalledTimes(1)
+    expect(verdict).toHaveBeenCalledTimes(1)
   })
 
   it("does not consult the lock for a read at all", async () => {
     await StorageService.downloadObject("a.png")
 
-    expect(isStorageWriteLocked).not.toHaveBeenCalled()
+    expect(verdict).not.toHaveBeenCalled()
   })
 })
 

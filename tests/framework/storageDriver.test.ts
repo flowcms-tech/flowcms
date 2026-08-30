@@ -14,6 +14,17 @@ import type { StorageDriver } from "@/Framework/Storage/StorageDriver"
  * and a facade that happened to keep calling S3 directly would look identical.
  */
 
+/**
+ * The write gate is not what this file tests, and since Phase 4a it FAILS
+ * CLOSED — with no database here, the real gate would return "unknown" and
+ * refuse every mutation. Declared writable so these assertions are about
+ * dispatch. `storageWriteLock.test.ts` and `storageWriteLockPrimitive.test.ts`
+ * cover the gate itself.
+ */
+vi.mock("@/Framework/Storage/storageWriteLock", () => ({
+  assertStorageWritable: async () => {},
+}))
+
 const resolveStorageDriver = vi.fn()
 vi.mock("@/Framework/Storage/resolveStorageDriver", () => ({
   resolveStorageDriver: () => resolveStorageDriver(),
@@ -39,6 +50,9 @@ function fakeDriver(overrides: Partial<StorageDriver> = {}): StorageDriver {
     // Streaming scan. Not exercised by this file; present because the contract
     // requires it.
     scanEntries: async function* () {},
+    // Bounded-memory read seam. Not exercised by this file; present because
+    // the contract requires it.
+    openReadStream: async () => (async function* () {})(),
     ...overrides,
   }
 }

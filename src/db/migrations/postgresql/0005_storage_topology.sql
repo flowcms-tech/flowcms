@@ -23,13 +23,20 @@ CREATE TABLE "storage_migration" (
 	"destinationRoot" text,
 	"destinationAccessKeyId" text,
 	"destinationSecretAccessKey" text,
+	"version" integer DEFAULT 0 NOT NULL,
 	"totalEntries" integer,
 	"copiedEntries" integer DEFAULT 0 NOT NULL,
 	"verifiedEntries" integer DEFAULT 0 NOT NULL,
 	"incompatibleEntries" integer DEFAULT 0 NOT NULL,
 	"conflictingEntries" integer DEFAULT 0 NOT NULL,
 	"extraEntries" integer DEFAULT 0 NOT NULL,
-	"inventoryCursor" text,
+	"missingEntries" integer DEFAULT 0 NOT NULL,
+	"matchingEntries" integer DEFAULT 0 NOT NULL,
+	"sourceCursor" text,
+	"sourceScanCompletedAt" bigint,
+	"destinationCursor" text,
+	"destinationScanCompletedAt" bigint,
+	"destinationCaseSensitive" boolean,
 	"extrasAcknowledged" boolean DEFAULT false NOT NULL,
 	"failureReason" text,
 	"baselineCompletedAt" bigint,
@@ -42,8 +49,11 @@ CREATE TABLE "storage_migration_entry" (
 	"migrationId" text NOT NULL,
 	"key" text NOT NULL,
 	"kind" text NOT NULL,
+	"classification" text NOT NULL,
 	"state" text NOT NULL,
 	"sourceSize" integer,
+	"sourceLastModified" bigint,
+	"sourceETag" text,
 	"sourceHash" text,
 	"destinationSize" integer,
 	"destinationHash" text,
@@ -54,4 +64,4 @@ CREATE TABLE "storage_migration_entry" (
 );--> statement-breakpoint
 ALTER TABLE "storage_migration_entry" ADD CONSTRAINT "storage_migration_entry_migrationId_storage_migration_id_fk" FOREIGN KEY ("migrationId") REFERENCES "public"."storage_migration"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "storage_migration_entry_job_state_idx" ON "storage_migration_entry" USING btree ("migrationId","state");--> statement-breakpoint
-CREATE INDEX "storage_migration_entry_job_key_idx" ON "storage_migration_entry" USING btree ("migrationId","key");
+CREATE UNIQUE INDEX "storage_migration_entry_job_key_idx" ON "storage_migration_entry" USING btree ("migrationId","key");

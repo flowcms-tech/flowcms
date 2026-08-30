@@ -23,13 +23,20 @@ CREATE TABLE `storage_migration` (
 	`destinationRoot` text,
 	`destinationAccessKeyId` text,
 	`destinationSecretAccessKey` text,
+	`version` integer DEFAULT 0 NOT NULL,
 	`totalEntries` integer,
 	`copiedEntries` integer DEFAULT 0 NOT NULL,
 	`verifiedEntries` integer DEFAULT 0 NOT NULL,
 	`incompatibleEntries` integer DEFAULT 0 NOT NULL,
 	`conflictingEntries` integer DEFAULT 0 NOT NULL,
 	`extraEntries` integer DEFAULT 0 NOT NULL,
-	`inventoryCursor` text,
+	`missingEntries` integer DEFAULT 0 NOT NULL,
+	`matchingEntries` integer DEFAULT 0 NOT NULL,
+	`sourceCursor` text,
+	`sourceScanCompletedAt` integer,
+	`destinationCursor` text,
+	`destinationScanCompletedAt` integer,
+	`destinationCaseSensitive` integer,
 	`extrasAcknowledged` integer DEFAULT 0 NOT NULL,
 	`failureReason` text,
 	`baselineCompletedAt` integer,
@@ -42,8 +49,11 @@ CREATE TABLE `storage_migration_entry` (
 	`migrationId` text NOT NULL,
 	`key` text NOT NULL,
 	`kind` text NOT NULL,
+	`classification` text NOT NULL,
 	`state` text NOT NULL,
 	`sourceSize` integer,
+	`sourceLastModified` integer,
+	`sourceETag` text,
 	`sourceHash` text,
 	`destinationSize` integer,
 	`destinationHash` text,
@@ -54,4 +64,4 @@ CREATE TABLE `storage_migration_entry` (
 	FOREIGN KEY (`migrationId`) REFERENCES `storage_migration`(`id`) ON UPDATE no action ON DELETE cascade
 );--> statement-breakpoint
 CREATE INDEX `storage_migration_entry_job_state_idx` ON `storage_migration_entry` (`migrationId`,`state`);--> statement-breakpoint
-CREATE INDEX `storage_migration_entry_job_key_idx` ON `storage_migration_entry` (`migrationId`,`key`);
+CREATE UNIQUE INDEX `storage_migration_entry_job_key_idx` ON `storage_migration_entry` (`migrationId`,`key`);

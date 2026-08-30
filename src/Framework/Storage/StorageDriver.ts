@@ -103,6 +103,22 @@ export interface StorageDriver {
    */
   scanEntries(options?: { after?: string }): AsyncIterable<StorageEntry>
 
+  /**
+   * The object's bytes, in chunks.
+   *
+   * SEPARATE FROM `downloadObject` ON PURPOSE. `downloadObject` returns a
+   * Buffer, which is right for serving a 200 KB image through a route and wrong
+   * for hashing a 2 GB video: the whole object would sit in memory at once, and
+   * a migration verifying a store would do that for every object in turn.
+   *
+   * Used only by migration. The File Manager and the public image route keep
+   * using `downloadObject`, because a route that already buffers its response
+   * gains nothing from streaming and would only get more complicated.
+   *
+   * Throws `StorageObjectNotFoundError` for a missing key, like its sibling.
+   */
+  openReadStream(key: string): Promise<AsyncIterable<Uint8Array>>
+
   copyObject(oldKey: string, newKey: string): Promise<void>
   renameObject(oldKey: string, newKey: string): Promise<void>
   copyPrefix(oldPrefix: string, newPrefix: string): Promise<void>

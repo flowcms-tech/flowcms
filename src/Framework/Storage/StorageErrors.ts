@@ -80,6 +80,17 @@ export type StorageConfigProblem =
   | "local_path_missing"
   /** Driver is `local` and the root cannot be created, read or written. */
   | "local_path_unusable"
+  /**
+   * A completed installation could not record, or could not confirm, which
+   * storage location is active.
+   *
+   * Distinct from the four above: nothing is wrong with the CONFIGURATION, the
+   * problem is that FlowCMS cannot establish the durable fact of which location
+   * is in use. It refuses rather than falling back to environment topology,
+   * because falling back is precisely how an environment edit silently
+   * relocates a live installation.
+   */
+  | "active_topology_unavailable"
 
 /**
  * The deployment's storage configuration cannot be resolved.

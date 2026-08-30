@@ -95,24 +95,80 @@ describe("bootstrap: an installation with nothing pinned", () => {
 
   it("pins the topology once setup is complete", async () => {
     // The moment the installation becomes real, what it is using becomes what
-    // it owns.
+    // it owns. The second read models what the database actually contains once
+    // the pin has committed.
     vi.stubEnv("STORAGE_DRIVER", "s3")
-    getSettingsRow.mockResolvedValue({ setupCompletedAt: new Date(), activeStorageDriver: null })
+    getSettingsRow
+      .mockResolvedValueOnce({ setupCompletedAt: new Date(), activeStorageDriver: null })
+      .mockResolvedValue(
+        pinnedS3({
+          activeStorageBucket: "env-bucket",
+          activeStorageEndpoint: "https://env.example.com",
+          activeStorageRegion: "env-region",
+        }),
+      )
 
-    await getActiveStorageConfig()
+    const config = await getActiveStorageConfig()
 
     expect(pinActiveStorage).toHaveBeenCalledWith(
       expect.objectContaining({ driver: "s3", bucket: "env-bucket" }),
     )
+    // And it serves the persisted value, not the one it happened to resolve.
+    expect(config).toMatchObject({ bucket: "env-bucket" })
   })
 
-  it("still returns a usable configuration if pinning fails", async () => {
-    // Pinning is a side effect of a read path. A database hiccup must not take
-    // storage down with it.
+  it("REFUSES rather than serving unpinned environment topology when the pin fails", async () => {
+    // CHANGED IN PHASE 4a, and the checkpoint had this wrong.
+    //
+    // Pinning used to be best-effort: if the write failed, resolution carried
+    // on using the environment. That quietly reopens the exact hole the
+    // snapshot exists to close — a completed installation whose pin keeps
+    // failing runs indefinitely on mutable environment topology while
+    // believing itself protected, and an environment edit during that window
+    // relocates it silently.
+    //
+    // A completed installation that cannot record where its files live is in a
+    // state FlowCMS must not guess about. Refusing surfaces as a storage
+    // configuration failure — readiness reports it, uploads fail loudly — and
+    // the operator's next request tries again.
     vi.stubEnv("STORAGE_DRIVER", "s3")
     getSettingsRow.mockResolvedValue({ setupCompletedAt: new Date(), activeStorageDriver: null })
     pinActiveStorage.mockRejectedValue(new Error("SQLITE_BUSY"))
 
+    await expect(getActiveStorageConfig()).rejects.toMatchObject({
+      name: "StorageConfigurationError",
+    })
+  })
+
+  it("re-reads the winner when another request pins first", async () => {
+    // Two requests arrive together on a freshly-completed installation. Both
+    // see no snapshot; the conditional UPDATE means only one writes. The loser
+    // must NOT carry on with what it resolved from the environment — it must
+    // adopt whatever was actually persisted, or the two requests would disagree
+    // about where files live for the rest of their lifetimes.
+    vi.stubEnv("STORAGE_DRIVER", "s3")
+    vi.stubEnv("S3_BUCKET", "env-bucket")
+
+    getSettingsRow
+      .mockResolvedValueOnce({ setupCompletedAt: new Date(), activeStorageDriver: null })
+      // The re-read after pinning: somebody else got there first.
+      .mockResolvedValue(pinnedS3())
+
+    const config = await getActiveStorageConfig()
+
+    expect(config).toMatchObject({ bucket: "pinned-bucket" })
+  })
+
+  it("does not fall back to the environment when the re-read disagrees", async () => {
+    vi.stubEnv("STORAGE_DRIVER", "local")
+    vi.stubEnv("LOCAL_STORAGE_PATH", "/env/path")
+
+    getSettingsRow
+      .mockResolvedValueOnce({ setupCompletedAt: new Date(), activeStorageDriver: null })
+      .mockResolvedValue(pinnedS3())
+
+    // The environment said local; the persisted answer says s3. The persisted
+    // answer wins, because it is the one that describes where the files are.
     expect((await getActiveStorageConfig()).driver).toBe("s3")
   })
 })

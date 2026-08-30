@@ -142,6 +142,27 @@ async function assertNoSymlinkEscape(root: string, target: string): Promise<void
   assertInside(root, real)
 }
 
+/**
+ * Why a key cannot become a local path, or null if it can.
+ *
+ * THE SAME FUNCTION THE DRIVER USES, exposed rather than reimplemented. The
+ * migration's compatibility scanner has to answer "would the local driver
+ * refuse this key?" and the only trustworthy way to answer it is to ask the
+ * rule itself — a second copy of the rules would drift, and the drift would
+ * show up as a migration that passed its preflight and then failed mid-copy.
+ *
+ * Pure and synchronous: it inspects the key's SHAPE only. Containment against a
+ * real root, which needs the filesystem, stays in `createLocalPathResolver`.
+ */
+export function localKeyProblem(key: string, options: { allowTrailingSlash?: boolean } = {}): string | null {
+  try {
+    toSegments(key, { allowTrailingSlash: options.allowTrailingSlash ?? false })
+    return null
+  } catch (error) {
+    return error instanceof UnsafeStorageKeyError ? error.message : "it is not usable"
+  }
+}
+
 export interface LocalPathResolver {
   /** The storage root, resolved through its own real path. */
   readonly root: string

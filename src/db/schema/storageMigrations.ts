@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core"
+import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core"
 
 /**
  * MOVING AN INSTALLATION'S FILES FROM ONE BACKEND TO ANOTHER.
@@ -62,7 +62,18 @@ export const storageMigrations = sqliteTable("storage_migration", {
   destinationSecretAccessKey: text("destinationSecretAccessKey"),
 
   // -- Progress -------------------------------------------------------------
-  /** Entries discovered by inventory. Null until inventory finishes. */
+  /**
+   * OPTIMISTIC CONCURRENCY.
+   *
+   * Every transition writes `version = version + 1` guarded by the version it
+   * read. Two requests advancing the same job — an operator double-clicking, or
+   * two replicas polling the same batch — cannot both win: the second matches
+   * no row and is told the job moved underneath it. Without this, two callers
+   * could each read `ready`, each decide to start, and both begin working.
+   */
+  version: integer("version").notNull().default(0),
+
+  /** Entries discovered by inventory. Null until the source scan finishes. */
   totalEntries: integer("totalEntries"),
   copiedEntries: integer("copiedEntries").notNull().default(0),
   verifiedEntries: integer("verifiedEntries").notNull().default(0),
@@ -72,15 +83,46 @@ export const storageMigrations = sqliteTable("storage_migration", {
   conflictingEntries: integer("conflictingEntries").notNull().default(0),
   /** Present at the destination and not at the source. Never deleted; reported. */
   extraEntries: integer("extraEntries").notNull().default(0),
+  /** At the source, not yet at the destination. Copy mode: work to do.
+   *  Verify-only mode: a blocking failure of the operator's claim. */
+  missingEntries: integer("missingEntries").notNull().default(0),
+  /** Present on both sides with identical content. */
+  matchingEntries: integer("matchingEntries").notNull().default(0),
 
   /**
-   * Resumable inventory position — the last key enumerated.
+   * Resumable scan positions — the last key enumerated on each side.
    *
-   * A cursor rather than a page number: object stores paginate by key, and a
+   * TWO CURSORS, NOT ONE. The checkpoint had a single `inventoryCursor`, which
+   * cannot express a job that finished scanning the source and is halfway
+   * through the destination. Resuming such a job would have restarted one of
+   * the two scans from the beginning.
+   *
+   * Cursors rather than page numbers: both backends enumerate by key, and a
    * numeric offset would silently skip or repeat entries when the store changes
    * between batches.
+   *
+   * `null` cursor with a `null` completedAt means "not started"; a set cursor
+   * means "in progress"; a set completedAt means "done" — so a resumed job can
+   * tell those three apart, which one nullable column cannot.
    */
-  inventoryCursor: text("inventoryCursor"),
+  sourceCursor: text("sourceCursor"),
+  sourceScanCompletedAt: integer("sourceScanCompletedAt", { mode: "timestamp_ms" }),
+  destinationCursor: text("destinationCursor"),
+  destinationScanCompletedAt: integer("destinationScanCompletedAt", { mode: "timestamp_ms" }),
+
+  /**
+   * Whether the destination filesystem distinguishes `A.png` from `a.png`.
+   *
+   * PROBED ONCE AND RECORDED, rather than derived from `process.platform`.
+   * A Linux container can mount a case-insensitive volume and macOS is
+   * case-insensitive by default, so the platform is a guess where the
+   * filesystem is a fact. Recorded on the job so that a restart part-way
+   * through inventory cannot reinterpret keys already classified under the
+   * other assumption.
+   *
+   * Null for S3 destinations, where keys are case-sensitive byte strings.
+   */
+  destinationCaseSensitive: integer("destinationCaseSensitive", { mode: "boolean" }),
 
   /** Operator acknowledgement that destination-only objects will become
    *  visible in the File Manager after cutover. Required to leave `ready`. */
@@ -127,11 +169,47 @@ export const storageMigrationEntries = sqliteTable(
      *  one side and a real directory on the other. */
     kind: text("kind").notNull(),
 
-    /** `pending`, `copied`, `verified`, `matching`, `conflict`, `incompatible`,
-     *  `failed`, `source_deleted`. */
+    /**
+     * WHAT THE BASELINE COMPARISON FOUND. See `storageMigrationEntry.ts`.
+     *
+     * SEPARATE FROM `state`, and the checkpoint conflated them. One column
+     * cannot say "this entry is missing at the destination AND has now been
+     * copied" — classification describes the comparison, state describes
+     * progress against it, and Phase 4b needs both at once.
+     *
+     * `missing` | `matching` | `conflicting` | `destination_only` | `incompatible`
+     */
+    classification: text("classification").notNull(),
+
+    /**
+     * PROGRESS AGAINST THAT CLASSIFICATION.
+     *
+     * `pending` | `hashed` | `copied` | `verified` | `blocked` | `failed` |
+     * `source_deleted`
+     */
     state: text("state").notNull(),
 
     sourceSize: integer("sourceSize"),
+    /**
+     * Baseline modification time, for Phase 4b's delta detection.
+     *
+     * A CHEAP PRE-FILTER, NEVER THE DECISION. An object whose mtime moved is
+     * worth re-hashing; an object whose mtime did not move is NOT thereby
+     * proven unchanged — clocks skew, and S3 sets its own timestamps. The hash
+     * decides; this only narrows what has to be re-read.
+     */
+    sourceLastModified: integer("sourceLastModified", { mode: "timestamp_ms" }),
+    /**
+     * The provider's ETag, recorded and never trusted.
+     *
+     * INFORMATIONAL ONLY. A multipart upload's ETag is a hash of part hashes,
+     * so it depends on the part size the uploader chose; server-side encryption
+     * changes it again. Two identical objects can therefore carry different
+     * ETags, and two different objects the same one. It is kept because it is
+     * free and useful in a support conversation, and it is never the integrity
+     * decision — `sourceHash` is.
+     */
+    sourceETag: text("sourceETag"),
     /** SHA-256 of the source bytes. NOT an ETag: a multipart upload's ETag is a
      *  hash of part hashes, and server-side encryption changes it again, so two
      *  identical objects can carry different ETags and two different objects
@@ -160,10 +238,17 @@ export const storageMigrationEntries = sqliteTable(
       .$defaultFn(() => new Date()),
   },
   (table) => [
-    // The two access patterns: "next batch of pending work for this job" and
-    // "the row for this exact key".
+    // "The next batch of work for this job."
     index("storage_migration_entry_job_state_idx").on(table.migrationId, table.state),
-    index("storage_migration_entry_job_key_idx").on(table.migrationId, table.key),
+    /**
+     * UNIQUE, which the checkpoint's plain index was not.
+     *
+     * Inventory must be idempotent: a resumed or retried scan re-enumerates
+     * keys it has already recorded, and without uniqueness each retry inserted
+     * a duplicate row — inflating every count and giving the copy phase the
+     * same object twice. Uniqueness turns a retry into an upsert instead.
+     */
+    uniqueIndex("storage_migration_entry_job_key_idx").on(table.migrationId, table.key),
   ],
 )
 

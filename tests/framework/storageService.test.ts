@@ -48,6 +48,16 @@ vi.mock("@aws-sdk/client-s3", async (importOriginal) => {
   }
 })
 
+/**
+ * The write gate is not what this file tests, and since Phase 4a it FAILS
+ * CLOSED — with no database here, the real gate would return "unknown" and
+ * refuse every mutation, so these S3-command assertions would never run. The
+ * gate has its own two suites.
+ */
+vi.mock("@/Framework/Storage/storageWriteLock", () => ({
+  assertStorageWritable: async () => {},
+}))
+
 const getSignedUrl = vi.fn()
 vi.mock("@aws-sdk/s3-request-presigner", () => ({
   getSignedUrl: (...args: unknown[]) => getSignedUrl(...args),

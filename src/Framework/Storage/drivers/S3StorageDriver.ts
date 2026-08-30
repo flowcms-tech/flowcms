@@ -253,6 +253,20 @@ export function createS3StorageDriver(connect: () => Promise<S3Connection>): Sto
     await deleteAllUnderPrefix(await getS3Connection(), prefix)
   },
 
+  async openReadStream(key) {
+    const { client, bucket } = await getS3Connection()
+    let res
+    try {
+      res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }))
+    } catch (error) {
+      if (isMissingObject(error)) throw new StorageObjectNotFoundError(key)
+      throw error
+    }
+    // The SDK already hands back a Node Readable here; it is returned rather
+    // than collected, which is the entire point of this method.
+    return res.Body as unknown as AsyncIterable<Uint8Array>
+  },
+
   async *scanEntries(options) {
     const { client, bucket } = await getS3Connection()
 

@@ -14,6 +14,24 @@ import { join } from "node:path"
  * every Local install by design.
  */
 
+/**
+ * Storage is declared writable here.
+ *
+ * These suites classify CONFIGURATION, and the setup probe reaches storage
+ * through `StorageService` — which since Phase 4a consults the write gate, and
+ * the gate FAILS CLOSED. With no database in this context the real gate answers
+ * "unknown" and refuses, so every configuration verdict would come back
+ * "unavailable" and prove nothing about configuration.
+ *
+ * The production consequence is real and intended: the storage prerequisite now
+ * needs a reachable database. That is coherent, because the database is itself
+ * a prerequisite checked alongside it — an installation whose database is down
+ * has a bigger problem than its bucket.
+ */
+vi.mock("@/Framework/Storage/storageWriteLock", () => ({
+  assertStorageWritable: async () => {},
+}))
+
 const getS3Config = vi.fn()
 vi.mock("@/Framework/Settings/SettingsService", () => ({
   getS3Config: () => getS3Config(),

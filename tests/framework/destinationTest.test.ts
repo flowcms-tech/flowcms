@@ -63,6 +63,9 @@ function driverThatFails(step: keyof StorageDriver | null, error: unknown): Stor
     // Streaming scan. Not exercised by this file; present because the
     // contract requires it.
     scanEntries: async function* () {},
+    // Bounded-memory read seam. Not exercised by this file; present because
+    // the contract requires it.
+    openReadStream: async () => (async function* () {})(),
   }
   if (step) {
     ;(base as unknown as Record<string, unknown>)[step] = vi.fn(async () => {

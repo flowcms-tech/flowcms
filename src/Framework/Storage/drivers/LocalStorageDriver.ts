@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs"
+import { createReadStream, promises as fs } from "node:fs"
 import path from "node:path"
 import { createLocalPathResolver, type LocalPathResolver } from "../localPath"
 import { StorageAccessError, StorageObjectNotFoundError } from "../StorageErrors"
@@ -216,6 +216,22 @@ export function createLocalStorageDriver(rootPath: string): StorageDriver {
       directories.sort()
       files.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
       return { directories, files }
+    },
+
+    async openReadStream(key) {
+      const target = await (await paths()).resolveFile(key)
+      try {
+        // `stat` first so a missing object fails with the same typed error the
+        // Buffer path uses, rather than surfacing as a stream error later —
+        // the caller would otherwise have to handle "not found" in two places.
+        await fs.stat(target)
+      } catch (error) {
+        if (isMissing(error) || codeOf(error) === "EISDIR") {
+          throw new StorageObjectNotFoundError(key)
+        }
+        throw accessError("read", error)
+      }
+      return createReadStream(target)
     },
 
     async *scanEntries(options) {

@@ -185,10 +185,26 @@ export async function deleteReturning<T extends SQLiteTable>(
 export async function upsert<T extends SQLiteTable>(
   table: T,
   values: Insertable<T>,
-  options: { target: unknown; set: Record<string, unknown> },
+  options: {
+    target: unknown
+    set: Record<string, unknown>
+    /**
+     * The handle to write through. Defaults to the application's.
+     *
+     * Injectable so a caller holding a DIFFERENT handle — a repository built
+     * over a temporary database in a test, say — still gets the dialect
+     * branching from here rather than reimplementing it. The alternative was to
+     * let such callers write their own `onConflictDoUpdate`, which
+     * `dialectIsolation.test.ts` forbids precisely because that syntax is
+     * SQLite/PostgreSQL only and fails on MySQL and MariaDB.
+     */
+    executor?: Pick<typeof db, "insert">
+  },
 ): Promise<void> {
+  const executor = options.executor ?? db
+
   if (usesReturning()) {
-    await db
+    await executor
       .insert(table)
       .values(values as never)
       .onConflictDoUpdate({ target: options.target as never, set: options.set as never })
@@ -197,7 +213,7 @@ export async function upsert<T extends SQLiteTable>(
 
   // The canonical type has no onDuplicateKeyUpdate, so this reaches for the
   // MySQL builder explicitly. Confined to this file by design.
-  const insert = db.insert(table).values(values as never) as unknown as {
+  const insert = executor.insert(table).values(values as never) as unknown as {
     onDuplicateKeyUpdate: (config: { set: Record<string, unknown> }) => Promise<unknown>
   }
   await insert.onDuplicateKeyUpdate({ set: options.set })

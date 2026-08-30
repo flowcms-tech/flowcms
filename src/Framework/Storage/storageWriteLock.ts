@@ -31,6 +31,19 @@ import { storageMigrations } from "@/db/tables"
  * NOT CACHED, DELIBERATELY. One indexed query per mutation is nothing beside
  * the object-store round trip it precedes, and any cache at all would create a
  * staleness window during which writes slip through exactly when they must not.
+ *
+ * IT FAILS CLOSED. If the lock state cannot be read, the mutation is refused.
+ * The Phase 4 checkpoint failed OPEN on the reasoning that a database blip
+ * should not take uploads down — which is true in isolation and wrong as a
+ * safety property, because the one moment the answer matters most is a cutover,
+ * and a cutover writes to the database constantly. "I could not tell whether a
+ * cutover is running" and "a cutover is running" have to be treated the same,
+ * or the guarantee is only as good as the database's worst minute.
+ *
+ * The cost is bounded and honest: while the database is unreachable, storage
+ * mutations return a temporary maintenance response. Reads are untouched, so
+ * the public site keeps serving — and an installation whose database is down
+ * cannot render its admin panel to upload with anyway.
  */
 
 /** Statuses during which storage must not be mutated through the active driver. */
@@ -40,38 +53,53 @@ const LOCKING_STATUSES = ["cutting_over"] as const
 export class StorageWriteLockedError extends Error {
   /** So routes can answer 503 + Retry-After rather than a generic failure. */
   readonly retryAfterSeconds: number
+  /** `locked` — a cutover is running. `unknown` — it could not be determined. */
+  readonly verdict: "locked" | "unknown"
 
-  constructor() {
+  constructor(verdict: "locked" | "unknown" = "locked") {
     super(
-      "Storage is briefly read-only while this site finishes moving to its new storage location. " +
-        "Try again in a moment.",
+      verdict === "locked"
+        ? "Storage is briefly read-only while this site finishes moving to its new storage " +
+            "location. Try again in a moment."
+        : // Deliberately vague about the cause and precise about the effect: the
+          // operator cannot act on "the database was unreachable" mid-upload,
+          // and the honest statement is that FlowCMS declined to risk it.
+          "Storage is temporarily read-only because FlowCMS could not confirm it is safe to " +
+            "write. Try again in a moment.",
     )
     this.name = "StorageWriteLockedError"
     this.retryAfterSeconds = 15
+    this.verdict = verdict
   }
 }
 
 /**
- * Whether a cutover currently holds the lock.
+ * Whether storage may be mutated right now.
  *
- * Fails OPEN on a database error, and that is a deliberate trade. Failing
- * closed would mean a database hiccup makes every upload in the application
- * fail with a message about a migration that is not running — turning a
- * transient blip into a total outage of a feature nobody was migrating. The
- * risk it accepts is narrow: a write slipping into the cutover window during a
- * simultaneous database failure, which the cutover's own final verification
- * would then catch and refuse to complete on.
+ * Three answers rather than two, because "no cutover is running" and "I cannot
+ * tell" are different facts and only one of them is safe to write on.
  */
-export async function isStorageWriteLocked(): Promise<boolean> {
+export type StorageWriteVerdict = "writable" | "locked" | "unknown"
+
+export async function checkStorageWriteVerdict(): Promise<StorageWriteVerdict> {
   try {
     const row = await db.query.storageMigrations.findFirst({
       where: inArray(storageMigrations.status, [...LOCKING_STATUSES]),
       columns: { id: true },
     })
-    return Boolean(row)
+    return row ? "locked" : "writable"
   } catch {
-    return false
+    // FAILS CLOSED. See the note at the top of this file: the moment this
+    // answer matters most is a cutover, and a cutover is writing to the
+    // database throughout — so a database failure is exactly when a stale
+    // "unlocked" would do the damage.
+    return "unknown"
   }
+}
+
+/** Convenience for callers that only need the boolean. */
+export async function isStorageWriteLocked(): Promise<boolean> {
+  return (await checkStorageWriteVerdict()) !== "writable"
 }
 
 /**
@@ -84,7 +112,9 @@ export async function isStorageWriteLocked(): Promise<boolean> {
  * asserts that every mutating method is gated and every read is not.
  */
 export async function assertStorageWritable(): Promise<void> {
-  if (await isStorageWriteLocked()) throw new StorageWriteLockedError()
+  const verdict = await checkStorageWriteVerdict()
+  if (verdict === "writable") return
+  throw new StorageWriteLockedError(verdict)
 }
 
 /**
