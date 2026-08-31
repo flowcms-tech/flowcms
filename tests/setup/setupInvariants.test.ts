@@ -105,11 +105,29 @@ describe("the setup token never escapes the server", () => {
 
   it("is submitted as a password-style input", () => {
     const setupModule = code(readFileSync(join(SETUP_MODULE_DIR, "SetupModule.tsx"), "utf8"))
-    const field = setupModule.slice(setupModule.indexOf('name="setupToken"'))
-    expect(field.slice(0, 300)).toMatch(/type="password"/)
+
+    // Bounded by the ELEMENT, not by a character count.
+    //
+    // This used to read the first 300 characters after the name attribute, and
+    // it broke the moment the field grew a hint and an explanatory comment.
+    // `code()` removes comment TEXT but leaves the blank indented lines behind,
+    // so a comment costs the budget without putting anything in it — the
+    // assertion failed on a field that had `autoComplete="off"` all along,
+    // sitting just past the cutoff.
+    //
+    // A bigger number would only move the cliff. Slicing to the element's own
+    // closing `/>` has no cliff: it reads exactly the attributes of exactly this
+    // field however long they get.
+    const start = setupModule.indexOf('name="setupToken"')
+    expect(start, "the setup token field was not found").toBeGreaterThan(-1)
+    const end = setupModule.indexOf("/>", start)
+    expect(end, "the setup token field has no closing tag").toBeGreaterThan(-1)
+    const field = setupModule.slice(start, end)
+
+    expect(field).toMatch(/type="password"/)
     // `off`, not `new-password`: a deployment secret shared by everyone who
     // administers the server does not belong in one person's password manager.
-    expect(field.slice(0, 300)).toMatch(/autoComplete="off"/)
+    expect(field).toMatch(/autoComplete="off"/)
   })
 })
 

@@ -16,8 +16,9 @@ import { randomBytes } from "node:crypto"
  * USED BY SCAFFOLDING SINCE 7.4: `resolveConfig` calls it (via its injectable
  * `generateSecrets` dependency) to fill `AUTH_SECRET` and `CAPTCHA_SECRET` in
  * the generated `.env`. It was written one phase ahead of that, unused, so the
- * compatibility test could exist first — and nothing prints a generated value,
- * then or now.
+ * compatibility test could exist first. Of the values it generates, only the
+ * first-run setup token is ever printed; see `config/secrets.mjs` for why that
+ * one is different.
  *
  * That test is still the point: the CLI is a standalone package and cannot
  * import `@/Framework/…`, so the only way to know its output satisfies the
