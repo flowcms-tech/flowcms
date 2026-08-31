@@ -9,12 +9,30 @@ import { storageLocationId, type ResolvedStorageConfig } from "./storageConfig"
  * Writing the active-storage snapshot.
  *
  * Split from `activeStorage.ts` so the resolution logic can be tested without a
- * database, and so the two writes below — the first pin, and a cutover — are
- * the only places in FlowCMS that can change where files live.
+ * database.
+ *
+ * ONLY TWO WRITES IN FLOWCMS ESTABLISH OR MOVE A STORAGE LOCATION: the
+ * first-run pin below, which is conditional on there being no snapshot yet and
+ * therefore cannot relocate anything; and `commitCutover`, which replaces it
+ * inside the one authoritative transaction. Both build their columns with
+ * `activeStorageColumns` so there is a single definition of what the snapshot
+ * IS. `storageRetentionInvariants.test.ts` fails if a third writer appears.
  */
 
-/** The snapshot columns, derived from a resolved configuration. */
-function columnsFor(config: ResolvedStorageConfig) {
+/**
+ * The snapshot columns, derived from a resolved configuration.
+ *
+ * EXPORTED so the cutover transaction uses these exact columns rather than a
+ * second copy of them. There are only two writes in FlowCMS that establish or
+ * move a storage location — the first-run pin below, and `commitCutover` — and
+ * before this was shared they each spelled the same eight columns out
+ * separately. Two spellings of "where the files are" is one edit away from an
+ * installation whose snapshot and whose credentials disagree.
+ *
+ * `now` is a parameter because the cutover writes the settings row and the
+ * migration job in one transaction and stamps both with a single instant.
+ */
+export function activeStorageColumns(config: ResolvedStorageConfig, now: Date = new Date()) {
   return {
     activeStorageDriver: config.driver,
     activeStorageLocationId: storageLocationId(config),
@@ -22,8 +40,8 @@ function columnsFor(config: ResolvedStorageConfig) {
     activeStorageRegion: config.driver === "s3" ? (config.region ?? null) : null,
     activeStorageBucket: config.driver === "s3" ? config.bucket : null,
     activeStorageRoot: config.driver === "local" ? config.root : null,
-    activeStorageEstablishedAt: new Date(),
-    updatedAt: new Date(),
+    activeStorageEstablishedAt: now,
+    updatedAt: now,
   }
 }
 
@@ -42,38 +60,8 @@ function columnsFor(config: ResolvedStorageConfig) {
 export async function pinActiveStorage(config: ResolvedStorageConfig): Promise<void> {
   await db
     .update(settings)
-    .set(columnsFor(config))
+    .set(activeStorageColumns(config))
     .where(and(eq(settings.id, SETTINGS_SINGLETON_ID), isNull(settings.activeStorageDriver)))
 
-  await invalidateSettingsCache()
-}
-
-/**
- * Moves the active topology. THE ONLY FUNCTION IN FLOWCMS THAT DOES.
- *
- * Unconditional, unlike `pinActiveStorage`, because a cutover is precisely the
- * case where an existing snapshot must be replaced. It is exported separately
- * rather than as a flag on the same function so that the dangerous operation
- * has a name a reader cannot miss, and so `grep` finds every caller.
- *
- * Takes an optional transaction: the cutover writes this and the migration
- * job's terminal state together, so an installation can never be left pointing
- * at a destination its migration record does not know it reached.
- */
-export async function commitActiveStorage(
-  config: ResolvedStorageConfig,
-  tx?: Pick<typeof db, "update">,
-): Promise<void> {
-  const executor = tx ?? db
-
-  await executor
-    .update(settings)
-    .set(columnsFor(config))
-    .where(eq(settings.id, SETTINGS_SINGLETON_ID))
-
-  // Deliberately AFTER the write, and outside any transaction the caller may
-  // still roll back: a cache cleared for a change that then did not happen is
-  // one extra database read, while a cache left stale after a cutover serves
-  // the old bucket until it expires.
   await invalidateSettingsCache()
 }

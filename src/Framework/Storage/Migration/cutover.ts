@@ -4,7 +4,8 @@ import { affectedRowCount } from "@/db/writes"
 import { settings, storageMigrations } from "@/db/tables"
 import { SETTINGS_SINGLETON_ID } from "@/db/schema/settings"
 import { invalidateSettingsCache } from "@/Framework/Settings/SettingsService"
-import { storageLocationId, type ResolvedStorageConfig } from "../storageConfig"
+import { activeStorageColumns } from "../activeStorageStore"
+import { type ResolvedStorageConfig } from "../storageConfig"
 import type { MigrationRow } from "./migrationRepository"
 
 /**
@@ -139,20 +140,14 @@ export async function commitCutover(
   store: CutoverStore = defaultStore(),
 ): Promise<void> {
   const { settings, migrations: storageMigrations } = store
-  const locationId = storageLocationId(destination)
   const now = new Date()
 
   await store.db.transaction(async (tx) => {
-    const activeColumns: Record<string, unknown> = {
-      activeStorageDriver: destination.driver,
-      activeStorageLocationId: locationId,
-      activeStorageEndpoint: destination.driver === "s3" ? (destination.endpoint ?? null) : null,
-      activeStorageRegion: destination.driver === "s3" ? (destination.region ?? null) : null,
-      activeStorageBucket: destination.driver === "s3" ? destination.bucket : null,
-      activeStorageRoot: destination.driver === "local" ? destination.root : null,
-      activeStorageEstablishedAt: now,
-      updatedAt: now,
-    }
+    // THE SAME COLUMN DEFINITION THE FIRST-RUN PIN USES. Spelling them out a
+    // second time here is how a snapshot and a pin drift apart, and "where the
+    // files are" is the one fact in this system that must have a single
+    // definition.
+    const activeColumns: Record<string, unknown> = activeStorageColumns(destination, now)
 
     if (destination.driver === "s3") {
       // The endpoint/region/bucket and the credentials for them are one fact.

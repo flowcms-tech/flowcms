@@ -646,7 +646,7 @@ export function createMigrationService(deps: MigrationServiceDeps) {
    * The cutover. Sequenced in exactly one place — see `performCutover`.
    *
    * This function deliberately adds nothing to the ordering: it resolves the
-   * drivers and hands over. A route that could reach `commitActiveStorage`, the
+   * drivers and hands over. A route that could reach the commit transaction, the
    * lock, or the delta on its own would be a second implementation of the
    * critical section, and the two would drift.
    */

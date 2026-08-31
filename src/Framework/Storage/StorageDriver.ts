@@ -73,7 +73,18 @@ export interface StorageDriver {
   downloadObject(key: string): Promise<Buffer>
   deleteObject(key: string): Promise<void>
 
-  /** Recursive: every key under the prefix, at any depth. */
+  /**
+   * Recursive: every key under the prefix, at any depth.
+   *
+   * ONE KNOWN DIVERGENCE BETWEEN THE DRIVERS, recorded rather than papered
+   * over. S3 returns empty-folder MARKER objects — zero-byte keys ending in
+   * `/` — among the results, because to S3 they are ordinary objects; the
+   * filesystem driver walks real files and returns none. Nothing in the
+   * application calls this today (`listDirectory` is what the File Manager
+   * uses, and it filters markers on both sides), so the difference is not
+   * observable. A future caller that counts or iterates results must either
+   * skip keys ending in `/` or accept the difference deliberately.
+   */
   listObjects(prefix?: string): Promise<StorageObjectSummary[]>
 
   /** One level only: immediate children, folders separated from files. */

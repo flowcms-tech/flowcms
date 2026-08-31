@@ -18,7 +18,7 @@ import { requireApiAuth } from "@/Framework/Auth/apiAuth"
  * a single transaction, invalidate caches, clear the temporary credentials,
  * release.
  *
- * NO ROUTE IN FLOWCMS CAN REACH `commitActiveStorage` OR THE LOCK DIRECTLY, and
+ * NO ROUTE IN FLOWCMS CAN REACH THE LOCK, THE DELTA OR THE COMMIT DIRECTLY, and
  * that is the point of the split: an endpoint that could take the lock without
  * the delta, or commit without the verification, would be a second and shorter
  * implementation of the most dangerous operation the product has.

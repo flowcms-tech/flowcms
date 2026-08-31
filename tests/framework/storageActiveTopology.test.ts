@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { StorageConfigurationError } from "@/Framework/Storage/StorageErrors"
 
 /**
  * EVERY STORAGE STATUS SURFACE REPORTS WHERE THE FILES ACTUALLY ARE.
@@ -213,16 +212,6 @@ describe("when the location cannot be established at all", () => {
     expect(result.status).toBe("connection_failed")
   })
 
-  it("maps the same problem code to the setup page's own vocabulary", async () => {
-    // The two surfaces must never describe one deployment differently.
-    const { checkStoragePrerequisite } = await import("@/Framework/Setup/prerequisites")
-    expect(typeof checkStoragePrerequisite).toBe("function")
-
-    // Proven at the classifier level: `active_topology_unavailable` is a
-    // backend failure on both sides, never "misconfigured".
-    const error = new StorageConfigurationError("active_topology_unavailable", "x")
-    expect(error.problem).toBe("active_topology_unavailable")
-  })
 })
 
 describe("a cutover in progress does not make storage look broken", () => {

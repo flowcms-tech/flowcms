@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { eq } from "drizzle-orm"
-import { afterAll, describe, expect, it } from "vitest"
+import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import { parseDatabaseConfig, type DatabaseDialect } from "@/Framework/Config/databaseConfig"
 import { createDatabase, type DatabaseHandle } from "@/db/createDatabase"
 import { SETTINGS_SINGLETON_ID } from "@/db/schema/settings"
@@ -39,6 +40,15 @@ import { storageLocationId, type ResolvedStorageConfig } from "@/Framework/Stora
  *
  * The stores on both ends are real temporary directories. What varies is the
  * DATABASE, which is the axis the defect lived on.
+ *
+ * THE CONCURRENCY SUITE LIVES IN THIS FILE RATHER THAN ITS OWN, and that is not
+ * organisation — it is correctness. Both halves drive the SAME database, and
+ * "at most one migration is open per installation" is a global invariant, so
+ * two suites cannot each hold an open job. Vitest runs separate FILES in
+ * parallel workers, so as two files they raced and failed each other
+ * intermittently; within one file they run in order. A flaky guard test is
+ * worse than none, because the failure teaches people to re-run rather than
+ * look.
  */
 
 interface Engine {
@@ -195,16 +205,205 @@ describe.runIf(AVAILABLE.length > 0).each(AVAILABLE)("on $name", (engine) => {
   }, 180_000)
 })
 
-describe("coverage of this axis", () => {
-  it("reports which engines actually ran", () => {
-    // Printed rather than asserted: with no URLs supplied, nothing above runs,
-    // and a report that did not say so would read like evidence it had.
-    const names = AVAILABLE.map((e) => e.name)
-    console.log(
-      names.length
-        ? `[storage-migration] engine coverage: ${names.join(", ")}`
-        : "[storage-migration] engine coverage: NONE — set TEST_POSTGRES_URL / TEST_MYSQL_URL / TEST_MARIADB_URL",
-    )
-    expect(Array.isArray(names)).toBe(true)
+// --------------------------------------------------------------------------
+
+const URL = process.env.TEST_POSTGRES_URL
+const describeConcurrent = URL ? describe : describe.skip
+
+/** A repository on its OWN connection pool — one "replica". */
+function replica() {
+  const handle = createDatabase(
+    parseDatabaseConfig({ DATABASE_DIALECT: "postgresql", DATABASE_URL: URL! }),
+  )
+  handles.push(handle)
+  return {
+    handle,
+    repository: createMigrationRepository({
+      db: handle.db as never,
+      migrations: handle.schema.storageMigrations as never,
+      entries: handle.schema.storageMigrationEntries as never,
+      dialect: handle.dialect,
+    }),
+  }
+}
+
+describeConcurrent("guards that only matter across replicas", () => {
+  let a: ReturnType<typeof replica>
+  let b: ReturnType<typeof replica>
+
+  beforeEach(async () => {
+    a = a ?? replica()
+    b = b ?? replica()
+    await a.handle.db.delete(a.handle.schema.storageMigrationEntries as never)
+    await a.handle.db.delete(a.handle.schema.storageMigrations as never)
+  })
+
+  const topology = (id: string) => ({
+    driver: "s3" as const,
+    locationId: id,
+    endpoint: "https://example.com",
+    bucket: id,
+  })
+
+  async function openJob() {
+    return a.repository.create({
+      mode: "copy",
+      source: topology("source-bucket"),
+      destination: topology("destination-bucket"),
+    })
+  }
+
+  it("lets exactly ONE of two racing replicas open a migration", async () => {
+    // Two concurrent relocations would each copy to their own destination
+    // while the other mutated the source, so each final delta would be
+    // computed against a baseline the other had invalidated.
+    // SAFETY IS ASSERTED UNCONDITIONALLY; LIVENESS IS RETRIED.
+    //
+    // "Never two" is the guarantee, and it must hold on every attempt. "Exactly
+    // one wins" is a liveness property, and a loaded machine can legitimately
+    // break it — a pool that cannot hand out a connection rejects BOTH callers,
+    // which says nothing about the guard. This test failed once that way in a
+    // full 143-file run and passed repeatedly on its own, which is the
+    // signature of load rather than of a defect.
+    //
+    // So an attempt where nobody won for an INFRASTRUCTURE reason is retried,
+    // and one where nobody won because both were told a migration is already
+    // active is a real failure — that would mean a phantom job holding the slot.
+    let winners = 0
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await a.handle.db.delete(a.handle.schema.storageMigrations as never)
+
+      const results = await Promise.allSettled([
+        a.repository.create({
+          mode: "copy",
+          source: topology("source-bucket"),
+          destination: topology("dest-a"),
+        }),
+        b.repository.create({
+          mode: "copy",
+          source: topology("source-bucket"),
+          destination: topology("dest-b"),
+        }),
+      ])
+
+      winners = results.filter((r) => r.status === "fulfilled").length
+      const rows = await a.handle.db.select().from(a.handle.schema.storageMigrations as never)
+
+      // The two things that must be true every single time.
+      expect(winners, "two replicas both opened a migration").toBeLessThanOrEqual(1)
+      expect(rows.length, "two migration rows exist at once").toBeLessThanOrEqual(1)
+
+      if (winners === 1) {
+        expect(rows).toHaveLength(1)
+        return
+      }
+
+      const guardFired = results.every(
+        (r) => r.status === "rejected" && String(r.reason).includes("already in progress"),
+      )
+      expect(guardFired, "nobody won, and not because the guard refused them").toBe(false)
+    }
+
+    expect(winners, "no replica ever opened a migration across three attempts").toBe(1)
+  })
+
+  it("lets exactly ONE of two racing replicas advance the same job", async () => {
+    // The optimistic `version` guard. Both read the same version; only the
+    // write conditioned on it can match a row.
+    const job = await openJob()
+
+    const results = await Promise.allSettled([
+      a.repository.transition(job.id, job.version, "destination_tested"),
+      b.repository.transition(job.id, job.version, "destination_tested"),
+    ])
+
+    const reasons = results.map((r) => (r.status === "rejected" ? String(r.reason) : "ok"))
+    expect(results.filter((r) => r.status === "fulfilled"), reasons.join(" | ")).toHaveLength(1)
+    // The loser is refused on ONE of two grounds, depending on which side of
+    // the winner's commit its read landed: the version guard, or the state
+    // machine seeing a status that has already moved. Both are refusals.
+    const loser = reasons.find((r) => r !== "ok") ?? ""
+    expect(loser).toMatch(/changed while this request was working on it|cannot go from/)
+    const after = await a.repository.findById(job.id)
+    expect(after?.version).toBe(job.version + 1)
+  })
+
+  it("lets exactly ONE of two racing replicas take the cutover lock", async () => {
+    // The lock IS the write gate: if both took it, both would believe storage
+    // was theirs to switch.
+    const job = await openJob()
+    let current = await a.repository.transition(job.id, job.version, "destination_tested")
+    current = await a.repository.transition(current.id, current.version, "inventorying")
+    current = await a.repository.transition(current.id, current.version, "ready")
+    current = await a.repository.transition(current.id, current.version, "copying")
+    current = await a.repository.transition(current.id, current.version, "verifying")
+    current = await a.repository.transition(current.id, current.version, "ready_to_cutover")
+
+    const store = (r: ReturnType<typeof replica>) => ({
+      db: r.handle.db as never,
+      migrations: r.handle.schema.storageMigrations as never,
+    })
+
+    const [first, second] = await Promise.all([
+      acquireCutoverLock(current.id, "ready_to_cutover", store(a)),
+      acquireCutoverLock(current.id, "ready_to_cutover", store(b)),
+    ])
+
+    expect([first, second].filter(Boolean)).toHaveLength(1)
+  })
+
+  it("never hands the same entry to two racing replicas", async () => {
+    // Two workers streaming to one key interleaves into corruption on a
+    // filesystem, not a harmless duplicate write.
+    const job = await openJob()
+    for (let i = 0; i < 40; i += 1) {
+      await a.repository.recordEntry(job.id, {
+        key: `f-${i}.txt`,
+        kind: "file",
+        classification: "missing",
+        state: "pending",
+      })
+    }
+
+    const runA = randomUUID()
+    const runB = randomUUID()
+    const [claimedA, claimedB] = await Promise.all([
+      a.repository.claimEntries(job.id, runA, 40),
+      b.repository.claimEntries(job.id, runB, 40),
+    ])
+
+    const keysA = new Set(claimedA.map((row) => row.key))
+    const overlap = claimedB.map((row) => row.key).filter((key) => keysA.has(key))
+
+    expect(overlap).toEqual([])
+    expect(claimedA.length + claimedB.length).toBeLessThanOrEqual(40)
+  })
+
+  it("counts every entry exactly once when two replicas record the same keys", async () => {
+    // Inventory is resumable and retryable, so the same key legitimately
+    // arrives more than once — from two replicas at once, here. Without the
+    // unique `(migrationId, key)` index each arrival would insert a duplicate
+    // row, inflating every count and handing the copy phase the same object
+    // twice.
+    const job = await openJob()
+    const keys = Array.from({ length: 20 }, (_, i) => `dup-${i}.txt`)
+
+    const record = (r: ReturnType<typeof replica>) =>
+      Promise.all(
+        keys.map((key) =>
+          r.repository
+            .recordEntry(job.id, {
+              key,
+              kind: "file",
+              classification: "missing",
+              state: "pending",
+            })
+            .catch(() => {}),
+        ),
+      )
+
+    await Promise.all([record(a), record(b)])
+
+    expect(await a.repository.countEntries(job.id)).toBe(keys.length)
   })
 })

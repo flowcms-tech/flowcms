@@ -12,7 +12,7 @@ import type { StorageDriver } from "../StorageDriver"
  * written down before the next one starts.
  *
  * WHAT IT CANNOT DO, BY CONSTRUCTION: change where FlowCMS reads from. It has
- * no access to `commitActiveStorage`, no access to the settings row, and no
+ * no way to move the active topology, no access to the settings row, and no
  * concept of an active driver — it is handed a source and a destination and
  * writes only to the destination. A completed run leaves the site serving
  * exactly what it served before; making the destination authoritative is a

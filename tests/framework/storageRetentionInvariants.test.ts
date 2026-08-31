@@ -31,10 +31,17 @@ import { describe, expect, it } from "vitest"
 
 const MIGRATION_DIR = "src/Framework/Storage/Migration"
 
+/**
+ * Every source file under `root`, with FORWARD SLASHES.
+ *
+ * The assertions below compare against literal repository paths, and on
+ * Windows `join` produces backslashes — so an unnormalised path fails a
+ * comparison for a reason that has nothing to do with the code being checked.
+ */
 function sourceFiles(root: string): string[] {
   const out: string[] = []
   for (const entry of readdirSync(root)) {
-    const full = join(root, entry)
+    const full = join(root, entry).replace(/\\/g, "/")
     if (statSync(full).isDirectory()) out.push(...sourceFiles(full))
     else if (/\.tsx?$/.test(full)) out.push(full)
   }
@@ -46,8 +53,8 @@ function sourceFiles(root: string): string[] {
  *
  * These files explain themselves at length, and several of those explanations
  * NAME the operations being forbidden — "no route can reach
- * `commitActiveStorage`" is a comment that would fail a search for
- * `commitActiveStorage`. Stripping comments is what makes the assertions about
+ * the commit transaction" is a comment that would fail a search for the
+ * identifier it names. Stripping comments is what makes the assertions about
  * behaviour rather than about vocabulary.
  */
 function code(file: string): string {
@@ -125,22 +132,38 @@ describe("there is no cleanup, rollback or reverse-switch anywhere in storage", 
     expect(found).toEqual([])
   })
 
-  it("keeps `commitActiveStorage` reachable from exactly one place", () => {
-    // The only function in FlowCMS that moves the active topology. A second
-    // caller would be a second way to relocate an installation, and the whole
-    // point of the cutover transaction is that there is one.
-    const callers = ALL_STORAGE_FILES.filter((file) => {
-      if (file.endsWith("activeStorageStore.ts")) return false
-      return /\bcommitActiveStorage\s*\(/.test(readFileSync(file, "utf8"))
-    })
+  it("keeps the set of topology writers to exactly two", () => {
+    // REPLACED A TEST THAT PASSED FOR THE WRONG REASON. It asserted that
+    // `commitActiveStorage` had no caller outside its own module — and it
+    // passed because the function had NO caller at all. It was dead code whose
+    // comment claimed to be the only way to move a storage location, while the
+    // cutover moved one by writing the columns itself. A guard on a function
+    // nobody calls guards nothing.
+    //
+    // The real invariant is about the COLUMNS: only the first-run pin and the
+    // cutover transaction may write them, and both go through one definition.
+    const writers = ALL_STORAGE_FILES.filter((file) =>
+      /\bactiveStorageColumns\s*\(/.test(code(file)),
+    ).sort()
 
-    expect(callers).toEqual([])
+    expect(writers).toEqual([
+      "src/Framework/Storage/Migration/cutover.ts",
+      "src/Framework/Storage/activeStorageStore.ts",
+    ])
+  })
+
+  it("defines what the snapshot IS in exactly one place", () => {
+    const definitions = ALL_STORAGE_FILES.filter((file) =>
+      /export function activeStorageColumns/.test(code(file)),
+    )
+
+    expect(definitions).toEqual(["src/Framework/Storage/activeStorageStore.ts"])
   })
 
   it("is not reachable from any API route either", () => {
     const routes = sourceFiles("src/app/api")
     const offenders = routes.filter((file) =>
-      /\b(commitActiveStorage|acquireCutoverLock|commitCutover|computeFinalDelta)\s*\(/.test(
+      /\b(activeStorageColumns|acquireCutoverLock|commitCutover|computeFinalDelta)\s*\(/.test(
         code(file),
       ),
     )
