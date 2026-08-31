@@ -10,10 +10,20 @@ import { generateDeploymentSecret } from "../secrets.mjs"
  * copy-paste mistake here into a refused configuration rather than a subtle
  * one.
  *
- * NOTHING RETURNED FROM HERE IS EVER PRINTED. They travel to the env renderer
- * and stop. The summary says "Generated"; the final instructions tell the
- * operator where to find the setup token; no code path formats one into a
- * message.
+ * EXACTLY ONE OF THESE IS EVER PRINTED: the setup token. Everything else
+ * travels to the env renderer and stops — the summary says "Generated" and no
+ * code path formats the value into a message.
+ *
+ * The token is the deliberate exception, made when the first-run setup form was
+ * reworked. It authorizes one action once; afterwards the endpoint is gone and
+ * the value is inert, so the cost of showing it is bounded to terminal output,
+ * and it buys an operator who would otherwise be stuck on the first screen they
+ * ever see. That reasoning does not extend to any other value here, all of
+ * which stay valid for the life of the installation.
+ *
+ * `tests/scaffolder/orchestration.test.ts` holds the line: it reads the
+ * generated `.env` and asserts, by value, that the token is printed and that
+ * nothing else is.
  */
 export function generateSecrets(config) {
   const secrets = {
