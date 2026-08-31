@@ -124,7 +124,14 @@ describe("route policy coverage", () => {
       .map((file) => ({ pattern: toPattern(file), source: readFileSync(file, "utf8") }))
       .filter(({ pattern }) => !publicPatterns.has(pattern))
       .filter(({ pattern }) => !INLINE_ENFORCEMENT_EXEMPTIONS.includes(pattern))
-      .filter(({ source }) => !source.includes("requireApiAuth"))
+      // `guardMigrationRequest` is the shared gate plus a stricter floor: it
+      // calls `requireApiAuth`, then requires admin, then requires a
+      // same-origin request for every mutation. The test below pins that it
+      // still does all three, so this is a named wrapper rather than a hole.
+      .filter(
+        ({ source }) =>
+          !source.includes("requireApiAuth") && !source.includes("guardMigrationRequest"),
+      )
       .map(({ pattern }) => pattern)
       .sort()
 
@@ -133,6 +140,21 @@ describe("route policy coverage", () => {
       `These non-public routes never call requireApiAuth, so they are ` +
         `authenticated at best and unauthorized at worst:\n  ${ungated.join("\n  ")}`
     ).toEqual([])
+  })
+
+  it("keeps the migration gate a real gate", () => {
+    // The storage-migration routes reach the floor through
+    // `guardMigrationRequest` rather than calling `requireApiAuth` themselves.
+    // That indirection is only safe while the wrapper actually enforces
+    // something, so the wrapper is asserted here rather than trusted.
+    const gate = readFileSync("src/Framework/Storage/Migration/migrationApi.ts", "utf8")
+
+    expect(gate).toContain("requireApiAuth")
+    expect(gate).toContain("canManageSettings")
+    // Mutations must additionally be same-origin. Storage migration is the one
+    // operation that can repoint an installation, and the Auth.js cookie’s
+    // SameSite=Lax behaviour is protection nobody wrote down.
+    expect(gate).toContain("isSameOriginRequest")
   })
 
   it("keeps the inline-enforcement exemptions to routes that still check a role", () => {

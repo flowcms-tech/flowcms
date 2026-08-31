@@ -1,10 +1,8 @@
 import { auth, signOut } from "@/Framework/Auth/auth"
 import { adminLoginPath } from "@/Framework/Config/adminPath"
 import { getBrand, getGscConfig, getBingConfig } from "@/Framework/Settings/SettingsService"
-import { StorageService } from "@/Framework/Storage/StorageService"
+import { mediaPath } from "@/Framework/Storage/mediaUrl"
 import DashboardLayout from "@/Modules/Dashboard/DashboardLayout"
-
-const LOGO_URL_TTL_SECONDS = 3600
 
 export default async function AdminShellLayout({
   children,
@@ -18,7 +16,7 @@ export default async function AdminShellLayout({
     getBingConfig(),
   ])
   const logoUrl = brand.logoKey
-    ? await StorageService.getPresignedDownloadUrl(brand.logoKey, LOGO_URL_TTL_SECONDS)
+    ? mediaPath(brand.logoKey)
     : null
 
   async function handleSignOut() {

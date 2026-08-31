@@ -16,11 +16,13 @@ export const CACHE_PREFIX = "flowcms:cache:"
  * `delPattern` on its own entity, not this number — this is just the
  * self-healing backstop for the rare case an invalidation call is missed.
  *
- * It also has to stay well under the 1-hour presigned-URL TTL
- * (StorageService.getPresignedDownloadUrl's default) — several of the
- * responses cached under this TTL embed a presigned image URL, and a cache
- * entry that outlived its own embedded URL would start serving broken
- * images. 60s leaves a wide margin.
+ * It used to also have to stay well under the 1-hour presigned-URL TTL,
+ * because several responses cached here embedded a presigned image URL that
+ * expired independently of the cache entry — so an entry that outlived its own
+ * embedded URL started serving broken images. Phase 2 removed presigning
+ * entirely and cached payloads now carry stable `/api/media` paths, so that
+ * constraint is gone. 60s is kept for the invalidation-backstop reason above,
+ * which was always the real one.
  */
 export const ADMIN_CACHE_TTL_SECONDS = 60
 

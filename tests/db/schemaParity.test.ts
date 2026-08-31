@@ -89,7 +89,10 @@ const sqlite = sqliteTables()
 describe("schema parity", () => {
   it("derives every SQLite table into both dialects", () => {
     const expected = Object.keys(sqlite).sort()
-    expect(expected.length).toBe(27)
+    // 27 before Phase 4; `storage_migration` and `storage_migration_entry`
+    // make 29. The count is asserted so a table cannot be added to the
+    // canonical schema and silently fail to derive into the other two dialects.
+    expect(expected.length).toBe(29)
     expect(Object.keys(derived.postgresql).sort()).toEqual(expected)
     expect(Object.keys(derived.mysql).sort()).toEqual(expected)
   })
@@ -124,7 +127,8 @@ describe("derivation guards", () => {
       Object.values(tables).reduce<number>((n, t) => n + cfgFn(t as never).foreignKeys.length, 0)
 
     const base = Object.values(sqlite).reduce((n, t) => n + t.foreignKeys.length, 0)
-    expect(base).toBe(27)
+    // 27 before Phase 4; `storage_migration_entry.migrationId` makes 28.
+    expect(base).toBe(28)
     expect(count(derived.postgresql, (t) => pgConfig(t) as never)).toBe(base)
     expect(count(derived.mysql, (t) => mysqlConfig(t) as never)).toBe(base)
   })

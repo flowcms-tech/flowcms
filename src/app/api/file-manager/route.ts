@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { StorageService } from "@/Framework/Storage/StorageService"
+import { mediaPath } from "@/Framework/Storage/mediaUrl"
 import { isAllowedFileType, getFileCategory } from "@/Framework/Functions/FileValidation"
 import {
   MAX_UPLOAD_BYTES,
@@ -8,8 +9,6 @@ import {
 } from "@/Framework/Storage/objectKey"
 import { recordActivity } from "@/db/activityLog"
 import { requireApiAuth } from "@/Framework/Auth/apiAuth"
-
-const THUMBNAIL_URL_TTL_SECONDS = 3600
 
 function serializeObject(obj: { key: string; size: number; lastModified: Date }) {
   const name = obj.key.split("/").pop() || obj.key
@@ -21,13 +20,24 @@ function serializeObject(obj: { key: string; size: number; lastModified: Date })
   }
 }
 
-async function serializeObjectWithThumbnail(obj: { key: string; size: number; lastModified: Date }) {
+/**
+ * Adds the URL the grid renders as a thumbnail.
+ *
+ * Was a presigned URL pointing at the object store, which the browser fetched
+ * directly. On the bundled-Garage deployment that URL names `http://garage:3900`
+ * — a hostname only reachable from inside the Docker network — so every
+ * thumbnail was already broken there. It is now an application route, which
+ * works on any backend and leaks no bucket, endpoint or key.
+ *
+ * SYNCHRONOUS NOW. Building a URL needs no round trip, so listing a folder of a
+ * hundred images no longer issues a hundred signing operations.
+ */
+function serializeObjectWithThumbnail(obj: { key: string; size: number; lastModified: Date }) {
   const base = serializeObject(obj)
   if (getFileCategory(base.name) !== "image") {
     return base
   }
-  const thumbnailUrl = await StorageService.getPresignedDownloadUrl(obj.key, THUMBNAIL_URL_TTL_SECONDS)
-  return { ...base, thumbnailUrl }
+  return { ...base, thumbnailUrl: mediaPath(obj.key) }
 }
 
 export async function GET(request: NextRequest) {
@@ -38,7 +48,7 @@ export async function GET(request: NextRequest) {
   const prefix = searchParams.get("prefix") ?? ""
 
   const { directories, files } = await StorageService.listDirectory(prefix)
-  const serializedFiles = await Promise.all(files.map(serializeObjectWithThumbnail))
+  const serializedFiles = files.map(serializeObjectWithThumbnail)
 
   return NextResponse.json({
     data: { directories, files: serializedFiles },
@@ -116,7 +126,7 @@ export async function POST(request: NextRequest) {
   })
 
   return NextResponse.json({
-    data: await serializeObjectWithThumbnail({ key, size: buffer.length, lastModified: new Date() }),
+    data: serializeObjectWithThumbnail({ key, size: buffer.length, lastModified: new Date() }),
     message: "File uploaded",
   })
 }

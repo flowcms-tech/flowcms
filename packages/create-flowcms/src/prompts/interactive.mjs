@@ -233,28 +233,52 @@ export async function collectInteractively(partial, deps = {}) {
   }
 
   if (!answers.storage) {
-    answers.storage =
+    // THE CHOICE IS INFRASTRUCTURE, NOT A DRIVER. "Bundled Garage" and
+    // "External S3-compatible" are two ways to have an S3 endpoint and both run
+    // STORAGE_DRIVER=s3; only "Local filesystem" changes which driver runs.
+    //
+    // Garage is offered ONLY under Docker because it is a Compose service —
+    // there is nothing for a Local Node install to start.
+    const storageOptions =
       answers.deploymentMode === "local"
-        ? "s3"
-        : await ask(
-            select({
-              message: "Where do uploaded files go?",
-              initialValue: "garage",
-              options: [
-                {
-                  value: "garage",
-                  label: "Bundled Garage",
-                  hint: "self-hosted, runs beside the app",
-                },
-                {
-                  value: "s3",
-                  label: "External S3-compatible",
-                  hint: "AWS, R2, B2, Wasabi, Spaces…",
-                },
-              ],
-              ...io,
-            }),
-          )
+        ? [
+            {
+              value: "local",
+              label: "Local filesystem",
+              hint: "a directory beside the app; single-node",
+            },
+            {
+              value: "s3",
+              label: "External S3-compatible",
+              hint: "AWS, R2, B2, Wasabi, Spaces…",
+            },
+          ]
+        : [
+            {
+              value: "garage",
+              label: "Bundled Garage",
+              hint: "self-hosted object storage, runs beside the app",
+            },
+            {
+              value: "local",
+              label: "Local filesystem",
+              hint: "a directory on the /data volume; single-node",
+            },
+            {
+              value: "s3",
+              label: "External S3-compatible",
+              hint: "AWS, R2, B2, Wasabi, Spaces…",
+            },
+          ]
+
+    answers.storage = await ask(
+      select({
+        message: "Where do uploaded files go?",
+        initialValue: answers.deploymentMode === "local" ? "local" : "garage",
+        options: storageOptions,
+        ...io,
+      }),
+    )
   }
 
   if (answers.storage === "s3" && !answers.externalStorage) {

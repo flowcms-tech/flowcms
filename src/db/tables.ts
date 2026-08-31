@@ -70,3 +70,5 @@ export const customPages = t.customPages
 export const menus = t.menus
 export const menuItems = t.menuItems
 export const themeSettings = t.themeSettings
+export const storageMigrations = t.storageMigrations
+export const storageMigrationEntries = t.storageMigrationEntries

@@ -24,8 +24,10 @@ npx create-flowcms@latest my-site
   Themes are *installed* at build time (an explicit import in a registry) and
   *activated* at runtime (a setting an admin changes without a rebuild). A theme
   can live in the repository or arrive as an npm package.
-- **Media** — an S3-backed file manager with folders, and a rich-text editor
-  that inserts images from the same bucket.
+- **Media** — a file manager with folders, and a rich-text editor that inserts
+  images from the same store. Files live either on the **local filesystem** or
+  in any **S3-compatible** bucket, chosen at install time; moving an existing
+  site between the two is a verified migration rather than a settings change.
 - **SEO** — meta templates, JSON-LD, sitemaps (chunked), RSS, a news sitemap,
   redirect management with CSV import, a 404 log, broken-link scanning,
   internal-link suggestions, and a site-wide SEO audit.
@@ -104,9 +106,13 @@ Running from a checkout rather than Docker:
 
 - **Node.js 22+**. This is the primary supported runtime and what the Docker
   image runs. **Bun 1.2+** also works for local development.
-- An **S3-compatible** object store. Any of AWS S3, Cloudflare R2,
-  [Garage](https://garagehq.deuxfleurs.fr/), Wasabi, Backblaze B2, or
-  DigitalOcean Spaces. Garage is bundled in the Docker Compose setup.
+- **Somewhere to put uploaded files**, which is either:
+  - a **directory on the local filesystem** (`STORAGE_DRIVER=local`), simplest
+    for a single node and backed up alongside the database; or
+  - an **S3-compatible** object store — AWS S3, Cloudflare R2,
+    [Garage](https://garagehq.deuxfleurs.fr/), Wasabi, Backblaze B2 or
+    DigitalOcean Spaces. Garage is bundled in the Docker Compose setup, and is
+    reached through the S3 driver like any other provider.
 - **Redis** — optional, but recommended. It backs the admin cache and
   cross-instance login rate limiting.
 

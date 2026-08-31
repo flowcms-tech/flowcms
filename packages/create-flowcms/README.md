@@ -60,9 +60,11 @@ yourself. It writes a `.env` with generated secrets, selects the Compose
 topology, renders the Dockerfile for your package manager, and writes a README
 describing what you actually chose.
 
-There is no local-filesystem media backend, by design: FlowCMS serves images
-from S3-compatible object storage. In Docker the bundled Garage covers that
-without an account anywhere.
+Storage comes in two shapes. `local` keeps uploads as files in a directory,
+which suits a single node and needs no account anywhere. `s3` keeps them in any
+S3-compatible bucket — and in Docker the bundled Garage provides one, still
+without an account anywhere. Garage is infrastructure rather than a third
+option: it runs `STORAGE_DRIVER=s3`, exactly like a hosted provider.
 
 ### Secrets
 

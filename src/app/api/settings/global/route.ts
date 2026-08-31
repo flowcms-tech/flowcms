@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/db/client"
 import { settings } from "@/db/tables"
 import { SETTINGS_SINGLETON_ID } from "@/db/schema/settings"
-import { StorageService } from "@/Framework/Storage/StorageService"
+import { mediaPath } from "@/Framework/Storage/mediaUrl"
 import {
   getSettingsRow,
   getBrand,
@@ -16,6 +16,9 @@ import { canManageSettings, resolveRole } from "@/Framework/Auth/permissions"
 import { changedFieldLabels, recordActivity, summariseChanges } from "@/db/activityLog"
 import { requireApiAuth } from "@/Framework/Auth/apiAuth"
 import { upsert } from "@/db/writes"
+import { rejectTopologyChange } from "@/Framework/Storage/storageTopologyGuard"
+import { resolveStorageDriverName, LOCAL_STORAGE_PATH_ENV } from "@/Framework/Storage/storageConfig"
+import { getActiveStorageConfig } from "@/Framework/Storage/activeStorage"
 
 /** Settings hold credentials (S3, Google OAuth) and change how the public site
  *  behaves, so they stop at admin. GET is gated as well as PATCH: the response
@@ -23,7 +26,47 @@ import { upsert } from "@/db/writes"
  *  which is not something an editor account needs. */
 const SETTINGS_FORBIDDEN = "Only an owner or admin can manage site settings"
 
-const IMAGE_URL_TTL_SECONDS = 3600
+/**
+ * What the DEPLOYMENT ENVIRONMENT names, or null if `STORAGE_DRIVER` is set to
+ * something invalid.
+ *
+ * A CANDIDATE, NOT THE ANSWER. Since Phase 4 an established installation
+ * records which location it actually uses, and the environment only prepares a
+ * destination. This is reported so the screen can say "you changed this and it
+ * did not take effect"; `storageDriver` below is the fact.
+ *
+ * Never throws: this settings screen is the one place an operator can look to
+ * understand a misconfigured deployment, so it must render even when the
+ * configuration it is describing is wrong.
+ */
+function deploymentStorageDriver(): "s3" | "local" | null {
+  try {
+    return resolveStorageDriverName()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * WHERE THE FILES ACTUALLY ARE.
+ *
+ * Reads the durable active-storage snapshot. Before Phase 5 this response
+ * reported `resolveStorageDriverName()` — the environment — which is correct
+ * only until an installation migrates. An installation that has moved from S3
+ * to Local still has `STORAGE_DRIVER=s3` in its .env, and the one screen an
+ * operator opens to find out where their media lives would have confidently
+ * named the wrong backend.
+ *
+ * Null when it cannot be determined, so the screen degrades to the deployment
+ * candidate rather than failing to render.
+ */
+async function activeStorage() {
+  try {
+    return await getActiveStorageConfig()
+  } catch {
+    return null
+  }
+}
 
 /**
  * Reads one of the three JSON columns, returning the default rather than
@@ -52,11 +95,12 @@ function parseJsonArray<T>(raw: string | null | undefined): T[] {
  * fresh page load would show, not a hand-assembled echo of the request.
  */
 async function serializeSettings() {
-  const [row, brand, baseUrl, gscRedirectUri] = await Promise.all([
+  const [row, brand, baseUrl, gscRedirectUri, active] = await Promise.all([
     getSettingsRow(),
     getBrand(),
     getBaseUrl(),
     getGscRedirectUri(),
+    activeStorage(),
   ])
 
   return {
@@ -65,13 +109,30 @@ async function serializeSettings() {
     logoKey: brand.logoKey,
     logoAltText: brand.logoAltText,
     logoUrl: brand.logoKey
-      ? await StorageService.getPresignedDownloadUrl(brand.logoKey, IMAGE_URL_TTL_SECONDS)
+      ? mediaPath(brand.logoKey)
       : null,
     faviconKey: brand.faviconKey,
     faviconUrl: brand.faviconKey
-      ? await StorageService.getPresignedDownloadUrl(brand.faviconKey, IMAGE_URL_TTL_SECONDS)
+      ? mediaPath(brand.faviconKey)
       : null,
     baseUrl,
+    // WHICH BACKEND IS ACTUALLY RUNNING — the durable snapshot, falling back to
+    // the environment only while an installation has not pinned one (a fresh
+    // install, or one still being set up). The admin panel reports it and
+    // cannot change it: moving an installation between locations is a verified
+    // migration, not a form field.
+    storageDriver: active ? active.driver : deploymentStorageDriver(),
+    // Only meaningful for the local driver, and deliberately read-only: an
+    // arbitrary path typed into a browser can point outside the container's
+    // persistent volume, and that failure is silent until the next restart.
+    localStoragePath:
+      active?.driver === "local" ? active.root : process.env[LOCAL_STORAGE_PATH_ENV] || "",
+    // What the deployment CONFIGURES, which may differ from the two above after
+    // a migration. Reported so the screen can explain an edit that did not take
+    // effect; never applied. Null means STORAGE_DRIVER names something that is
+    // not a driver.
+    deploymentStorageDriver: deploymentStorageDriver(),
+    deploymentLocalStoragePath: process.env[LOCAL_STORAGE_PATH_ENV] || "",
     s3Endpoint: row?.s3Endpoint || process.env.S3_ENDPOINT || "",
     s3Region: row?.s3Region || process.env.S3_REGION || "",
     s3Bucket: row?.s3Bucket || process.env.S3_BUCKET || "",
@@ -154,6 +215,32 @@ export async function PATCH(request: NextRequest) {
       { message: parsed.error.issues.map((issue) => issue.message) },
       { status: 422 }
     )
+  }
+
+  // MOVING STORAGE IS A MIGRATION, NOT A SETTINGS EDIT.
+  //
+  // Enforced on the SERVER, not only by disabling inputs. The form is one
+  // client; this route is the rule. Changing the bucket or endpoint used to be
+  // an ordinary save that pointed FlowCMS at an empty location and left every
+  // existing image behind, with nothing copied and no way back.
+  //
+  // Credentials for the CURRENT location are untouched by this check — a
+  // rotation moves no files and an operator with a leaked key needs it now.
+  const row = await getSettingsRow()
+  const topologyProblem = rejectTopologyChange(
+    {
+      endpoint: row?.s3Endpoint || process.env.S3_ENDPOINT,
+      region: row?.s3Region || process.env.S3_REGION,
+      bucket: row?.s3Bucket || process.env.S3_BUCKET || "",
+    },
+    {
+      endpoint: parsed.data.s3Endpoint,
+      region: parsed.data.s3Region,
+      bucket: parsed.data.s3Bucket,
+    },
+  )
+  if (topologyProblem) {
+    return NextResponse.json({ message: [topologyProblem] }, { status: 409 })
   }
 
   // Empty string means "clear this override, fall back to the env var" —

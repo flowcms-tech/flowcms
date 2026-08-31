@@ -17,6 +17,53 @@ import { composeEnvFor } from "./compose.mjs"
  * the authoritative one is a guess. `.env.example` is where alternatives are
  * documented, and it ships unchanged.
  */
+/** Names the section for what this install actually uses. */
+function storageSectionTitle(config) {
+  return config.storage === "local" ? "File storage (local filesystem)" : "Object storage (S3-compatible)"
+}
+
+/**
+ * The sentence that stops a wrong edit, chosen by backend.
+ *
+ * Each one names the single mistake an operator is most likely to make while
+ * looking at this section.
+ */
+function storageSectionNotes(config) {
+  if (config.storage === "local") {
+    return [
+      "Uploads are files in a directory. STORAGE_DRIVER=local selects the",
+      "filesystem backend; LOCAL_STORAGE_PATH says where.",
+      "",
+      config.deploymentMode === "docker"
+        ? "The path MUST stay under /data. That is the persistent volume; any"
+        : "The path is relative to the project directory. Back it up alongside",
+      config.deploymentMode === "docker"
+        ? "other directory in the container is destroyed on the next restart."
+        : "your database — it holds every uploaded image.",
+      "",
+      "SINGLE-NODE. Two application instances do not share this directory",
+      "unless you have put it on a shared filesystem yourself.",
+    ]
+  }
+
+  if (config.storage === "garage") {
+    return [
+      "Pointing at the bundled Garage service on the Docker network. The",
+      "browser never talks to it: images are served through the application,",
+      "so this hostname only has to resolve inside Docker.",
+      "",
+      "STORAGE_DRIVER=s3 because Garage IS an S3 server. There is no Garage",
+      "driver, which is why moving to another provider is an edit here.",
+    ]
+  }
+
+  return [
+    "Your S3-compatible provider. FlowCMS does not branch on vendor — AWS,",
+    "R2, B2, Wasabi, Spaces and a self-hosted Garage all work through these",
+    "same values.",
+  ]
+}
+
 export function buildEnvFile(config) {
   const { secrets } = config
   const isDocker = config.deploymentMode === "docker"
@@ -70,19 +117,8 @@ export function buildEnvFile(config) {
       ],
     },
     {
-      title: "Object storage (S3-compatible)",
-      notes:
-        config.storage === "garage"
-          ? [
-              "Pointing at the bundled Garage service on the Docker network. The",
-              "browser never talks to it: images are served through",
-              "/api/public/images and presigned URLs are generated server-side.",
-            ]
-          : [
-              "Your S3-compatible provider. FlowCMS does not branch on vendor —",
-              "AWS, R2, B2, Wasabi, Spaces and a self-hosted Garage all work",
-              "through these five values.",
-            ],
+      title: storageSectionTitle(config),
+      notes: storageSectionNotes(config),
       entries: Object.entries(buildStorageEnv(config)),
     },
     {

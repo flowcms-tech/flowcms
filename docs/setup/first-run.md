@@ -11,7 +11,7 @@ FlowCMS separates two things that look similar and are not:
 
 | | Deployment configuration | CMS initialization |
 |---|---|---|
-| **What** | `DATABASE_DIALECT`, `DATABASE_URL`, `S3_*`, `FLOWCMS_ADMIN_PATH`, `REDIS_URL`, `AUTH_SECRET`, `CAPTCHA_SECRET`, `PREVIEW_SECRET`, `FLOWCMS_SETUP_TOKEN` | The first owner account, the site name and tagline, and the durable "this installation is initialized" marker |
+| **What** | `DATABASE_DIALECT`, `DATABASE_URL`, `STORAGE_DRIVER`, `LOCAL_STORAGE_PATH`, `S3_*`, `FLOWCMS_ADMIN_PATH`, `REDIS_URL`, `AUTH_SECRET`, `CAPTCHA_SECRET`, `PREVIEW_SECRET`, `FLOWCMS_SETUP_TOKEN` | The first owner account, the site name and tagline, and the durable "this installation is initialized" marker |
 | **Where** | Environment | Database |
 | **When** | Before the process boots | Once, through a web form or the CLI |
 | **Editable from the web?** | **No** | Yes, once |
@@ -174,7 +174,7 @@ intended outcome, and it is safer than any alternative.
 | Check | Required to complete setup? | Why |
 |---|---|---|
 | Database | **Yes** | Reachable *and* migrated. |
-| Storage (S3-compatible) | **Yes** | FlowCMS has no local media backend. |
+| Storage (active driver) | **Yes** | Whichever backend `STORAGE_DRIVER` selects — a directory, or a bucket. |
 | Login security (`CAPTCHA_SECRET`) | **Yes** | Without it nobody can sign in afterwards. |
 | Authentication security (`AUTH_SECRET`) | **Yes** | Without a strong one, anyone can sign in as anyone. |
 | Redis | No — never checked | Optional everywhere in FlowCMS, and it stays optional here. |
@@ -194,15 +194,28 @@ with no supported way to reopen the form. It is deployment configuration and the
 setup page never asks for it; it appears as a system check, reported as a state,
 alongside database and storage.
 
-Storage is required because marking an installation complete while its only
-supported media backend is unusable hands you an admin panel where the File
-Manager, the editor's image picker and every upload fail — at exactly the moment
-the configuration was easiest to fix.
+Storage is required because marking an installation complete while the media
+backend is unusable hands you an admin panel where the File Manager, the
+editor's image picker and every upload fail — at exactly the moment the
+configuration was easiest to fix.
+
+**Only the ACTIVE driver is checked.** A `STORAGE_DRIVER=local` installation is
+proved by writing and reading a real file under `LOCAL_STORAGE_PATH`, and is
+never asked for S3 credentials it does not have. A `STORAGE_DRIVER=s3`
+installation is proved against its bucket. Omitting `STORAGE_DRIVER` means
+`s3`, so installations created before the variable existed behave exactly as
+they did.
 
 The storage check is a real round-trip through FlowCMS's own `StorageService`:
-it writes a small object under `.flowcms-setup-check/`, reads it back, and
-deletes it. A `HeadBucket` would not do — a credential that can list but not
+it writes a small object named `.flowcms-setup-check-<uuid>.txt`, reads it back,
+and deletes it. A `HeadBucket` would not do — a credential that can list but not
 write passes that and fails every upload you ever make.
+
+The key deliberately contains no `/`. On S3 a slash is just a character in a
+key, but on the local driver it would create a real directory, and deleting the
+file would leave that directory behind — so every local installation would grow
+a permanent phantom folder in its File Manager from a check nobody ran on
+purpose.
 
 The setup page reports **states only** — `Ready`, `Unavailable`,
 `Not configured`, `Migrations pending`. It is an unauthenticated page, so it

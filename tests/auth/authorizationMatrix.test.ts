@@ -85,6 +85,12 @@ describe("contributor — the least-privileged role", () => {
     "captcha",
     "dashboard",
     "file-manager",
+    // Reads the bytes of a stored object for a signed-in user. Same floor as
+    // browsing the File Manager, because this is what renders the thumbnails a
+    // contributor picks a featured image from. It replaced presigned URLs,
+    // which bypassed this matrix entirely by handing the browser a URL that
+    // fetched the object store directly, with no role check anywhere.
+    "media/[...key]",
     // Container probes, public by necessity — an orchestrator has no session.
     // They appear here because "reachable by a contributor" includes every
     // public route, not because a contributor is granted anything by them:
@@ -135,6 +141,12 @@ describe("contributor — the least-privileged role", () => {
   it("may upload media but never delete or move it", () => {
     expect(allows("file-manager", "GET", "contributor")).toBe(true)
     expect(allows("file-manager", "POST", "contributor")).toBe(true)
+    // Reading an object's bytes goes through /api/media, at the same floor.
+    expect(allows("media/[...key]", "GET", "contributor")).toBe(true)
+    // But an anonymous caller must NOT reach it. Anonymous image reads are
+    // /api/public/images only, which authorises a key solely because published
+    // content refers to it.
+    expect(allows("media/[...key]", "GET", null)).toBe(false)
     for (const pattern of [
       "file-manager/file",
       "file-manager/file/copy",
@@ -262,6 +274,28 @@ describe("editor", () => {
       for (const method of METHODS) {
         expect(allows(pattern, method, "editor"), `${pattern} ${method}`).toBe(false)
       }
+    }
+  })
+
+  it("cannot see or drive a storage migration, in either direction", () => {
+    // Migration is the most destructive thing the admin panel can start, and
+    // the READ side matters as much as the write side: the status response
+    // names the destination bucket and endpoint, and the entry report is a
+    // complete index of every object key in the store.
+    for (const pattern of [
+      "settings/storage/migration",
+      "settings/storage/migration/destination-test",
+      "settings/storage/migration/inventory",
+      "settings/storage/migration/advance",
+      "settings/storage/migration/entries",
+      "settings/storage/migration/cutover",
+    ]) {
+      for (const role of ["contributor", "editor"] as const) {
+        for (const method of METHODS) {
+          expect(allows(pattern, method, role), `${pattern} ${method} as ${role}`).toBe(false)
+        }
+      }
+      expect(allows(pattern, "GET", "admin"), `${pattern} GET as admin`).toBe(true)
     }
   })
 

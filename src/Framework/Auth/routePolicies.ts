@@ -209,6 +209,11 @@ export const ROUTE_POLICIES: Record<string, RoutePolicy> = {
     reason:
       "Browsing and uploading media is required to give a draft a featured image. Destructive operations live on the sibling routes below and stop at editor.",
   },
+  "media/[...key]": {
+    default: "contributor",
+    reason:
+      "Serves the bytes of a stored object to a signed-in user. Same floor as browsing the File Manager, and for the same reason: this is how a contributor sees the thumbnails they pick a featured image from. It replaced presigned URLs, which handed the browser a URL pointing straight at the object store — unreachable on the bundled-Garage deployment and impossible for a filesystem backend.",
+  },
 
   // Taxonomy and author profiles: readable by anyone who fills in a post form,
   // writable only by an editor. Split by method rather than given a single
@@ -438,6 +443,44 @@ export const ROUTE_POLICIES: Record<string, RoutePolicy> = {
     reason:
       "Settings hold S3 and OAuth credentials and change how the public site behaves. GET is gated too: the response reveals which secrets are configured and every endpoint the site talks to.",
   },
+  // === Storage migration ====================================================
+  //
+  // Six endpoints, one workflow, and the strictest floor in the registry. Note
+  // that GET is NOT widened: an editor has no reason to see a destination
+  // bucket, and a contributor who could enumerate object keys through a
+  // migration report would have found a way around the File Manager’s limits.
+
+  "settings/storage/migration": {
+    default: "admin",
+    reason:
+      "Storage migration. The most destructive operation the admin panel can start: it copies an installation to a new location and then repoints every media URL at it. Admin on reads as well as writes, because the status response names the destination bucket and endpoint, whether a destination secret is configured, and the object key of every conflict. Mutations additionally require a same-origin request, enforced in Framework/Storage/Migration/migrationApi.ts.",
+  },
+  "settings/storage/migration/destination-test": {
+    default: "admin",
+    reason:
+      "Writes, reads back, compares and deletes a probe object at a candidate destination using credentials supplied in the request. Admin-only for the same reasons as the migration itself, and because it is an outbound request to an operator-supplied endpoint.",
+  },
+  "settings/storage/migration/inventory": {
+    default: "admin",
+    reason:
+      "Enumerates and hashes every object in the source and the destination, one bounded batch per request. Admin-only: it reads the full contents of both stores.",
+  },
+  "settings/storage/migration/advance": {
+    default: "admin",
+    reason:
+      "Transfers a bounded batch of objects to the destination, or returns failed transfers to the queue. Admin-only: it writes an installation’s entire media library to a location the operator chose.",
+  },
+  "settings/storage/migration/entries": {
+    default: "admin",
+    reason:
+      "The per-key migration report. Admin-only because it lists object keys and the reasons individual files are blocked, which is a complete index of the store.",
+  },
+  "settings/storage/migration/cutover": {
+    default: "admin",
+    reason:
+      "Makes the destination authoritative. Irreversible, requires an explicit confirmation field, and is the only route that can move an installation’s active storage.",
+  },
+
   "appearance/themes": {
     default: "admin",
     reason:

@@ -1,19 +1,25 @@
 /**
- * Storage configuration: the bundled Garage, or any external S3-compatible
- * endpoint.
+ * Storage configuration: a local directory, the bundled Garage, or any external
+ * S3-compatible endpoint.
  *
- * THERE IS NO THIRD OPTION, and its absence is a product decision rather than a
- * gap. FlowCMS serves images through `/api/public/images` and presigned URLs
- * generated server-side; there is no local-filesystem media backend, so an
- * "uploads directory" choice here would configure something the application
- * does not implement.
+ * TWO CONCEPTS, KEPT SEPARATE ON PURPOSE.
  *
- * GARAGE IS INFRASTRUCTURE, NOT A MODE. The application talks to
- * `StorageService`, which talks S3, and it cannot tell the difference between
- * Garage and AWS. Nothing in this file branches application behaviour by
+ *   config.storage   WHAT TO SET UP     garage | s3 | local
+ *   STORAGE_DRIVER   WHAT TO RUN        s3 | local
+ *
+ * They are not the same enum, because Garage and an external provider are
+ * different infrastructure running the same driver. `storageDriverFor()` is the
+ * only place the mapping lives.
+ *
+ * GARAGE IS INFRASTRUCTURE, NOT A DRIVER. The application talks to
+ * `StorageService`, which dispatches to a driver, and the S3 driver cannot tell
+ * Garage from AWS. Nothing in this file branches application behaviour by
  * vendor, and nothing may start doing so: Garage is a Compose service and a set
  * of environment values, which is the whole reason an operator can move off it
  * by editing five variables.
+ *
+ * The header of this file used to say there was NO third option, because the
+ * application had no filesystem backend. Phase 2 gave it one.
  */
 
 /** Garage's own endpoint on the Docker network. The browser never sees it. */
@@ -26,16 +32,84 @@ export function usesGarage(config) {
 }
 
 /**
- * The five variables `StorageService` reads.
+ * Where a Docker install keeps uploads.
+ *
+ * UNDER `/data`, WHICH IS ALREADY PERSISTENT. `compose.yml` mounts
+ * `flowcms-data:/data`, the Dockerfile creates `/data` and chowns it to the
+ * unprivileged `flowcms` user, and `VOLUME ["/data"]` is declared. Uploads
+ * therefore survive `docker compose up` with no new volume, no new mount and
+ * nothing for an operator to remember to back up separately.
+ *
+ * Anywhere else inside the container is a directory in the container's writable
+ * layer, which is destroyed and recreated on the next `up` — and the failure is
+ * silent: uploads work, then are simply gone.
+ */
+export const DOCKER_LOCAL_STORAGE_PATH = "/data/uploads"
+
+/**
+ * Where a Local Node install keeps uploads.
+ *
+ * Project-relative, beside the SQLite database that `data/` already holds. The
+ * repository ignores `/data/` (an anchored rule in .gitignore) and `.dockerignore`
+ * excludes `data`, so uploads cannot be committed or swept into a build context
+ * by accident.
+ */
+export const LOCAL_NODE_STORAGE_PATH = "./data/uploads"
+
+/**
+ * The upload directory for a deployment mode.
+ *
+ * DERIVED, NEVER PROMPTED. A path typed into an installer is a path that can
+ * point outside the container's persistent volume, and that mistake is silent
+ * until the first restart. The operator picks Docker or Local Node; the path
+ * follows from that, and `LOCAL_STORAGE_PATH` in the generated `.env` is where
+ * they change it afterwards if they must.
+ */
+export function localStoragePathFor(deploymentMode) {
+  return deploymentMode === "docker" ? DOCKER_LOCAL_STORAGE_PATH : LOCAL_NODE_STORAGE_PATH
+}
+
+/**
+ * The runtime driver a storage choice runs on.
+ *
+ * THE ONE PLACE INFRASTRUCTURE BECOMES A DRIVER. Both S3-shaped choices collapse
+ * to the same driver here, which is the whole design: the application never
+ * learns whether its bucket is Garage in the next container or Backblaze in
+ * another country.
+ */
+export function storageDriverFor(config) {
+  return config.storage === "local" ? "local" : "s3"
+}
+
+/**
+ * The storage variables the APPLICATION reads.
  *
  * The exact names the application already uses — no aliases, no installer-only
  * spellings. An operator moving from Garage to R2 changes these values and
  * nothing else.
+ *
+ * ONLY THE RELEVANT ONES ARE WRITTEN. A Local install gets a driver and a path;
+ * it does not get five empty `S3_*` lines that read like something the operator
+ * forgot to fill in. An S3 install gets no `LOCAL_STORAGE_PATH` naming a
+ * directory nothing will ever write to.
+ *
+ * `STORAGE_DRIVER` is written EXPLICITLY in every case, including the S3 ones.
+ * Its absence means "s3" at runtime, but that default exists so that
+ * installations predating the variable keep working — it is an upgrade path, not
+ * a style. A freshly generated project should state what it is.
  */
 /** @returns {Record<string, string>} */
 export function buildStorageEnv(config) {
+  if (config.storage === "local") {
+    return {
+      STORAGE_DRIVER: "local",
+      LOCAL_STORAGE_PATH: localStoragePathFor(config.deploymentMode),
+    }
+  }
+
   if (config.storage === "garage") {
     return {
+      STORAGE_DRIVER: "s3",
       S3_ENDPOINT: GARAGE_ENDPOINT,
       S3_REGION: GARAGE_REGION,
       S3_BUCKET: GARAGE_BUCKET,
@@ -48,6 +122,7 @@ export function buildStorageEnv(config) {
   if (!external) return {}
 
   return {
+    STORAGE_DRIVER: "s3",
     S3_ENDPOINT: external.endpoint,
     S3_REGION: external.region,
     S3_BUCKET: external.bucket,
@@ -121,6 +196,13 @@ export function validateExternalStorage(external) {
 }
 
 export function describeStorage(config) {
+  if (config.storage === "local") {
+    // The single-node caveat is stated at the moment the choice is confirmed,
+    // not buried in documentation an operator reads after their second replica
+    // cannot see the first one's uploads. A local directory is only shared if
+    // the operator has made it shared.
+    return `Local filesystem, single-node (${localStoragePathFor(config.deploymentMode)})`
+  }
   if (config.storage === "garage") return "Garage (bundled, single-node)"
   const host = safeHost(config.externalStorage?.endpoint)
   return host ? `External S3-compatible (${host})` : "External S3-compatible"

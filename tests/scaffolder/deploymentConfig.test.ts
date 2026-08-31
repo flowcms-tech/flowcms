@@ -60,11 +60,17 @@ describe("the enums", () => {
     expect(DATABASES).toContain("mariadb")
   })
 
-  it("offers exactly two storage modes, and no local filesystem", () => {
-    // FlowCMS has no local media backend. A third option here would configure
-    // something the application does not implement.
-    expect(STORAGE_MODES).toEqual(["garage", "s3"])
-    expect(STORAGE_MODES).not.toContain("local")
+  it("offers three storage modes, two of which are S3-shaped", () => {
+    // CHANGED IN PHASE 3. This used to assert there were exactly two and that
+    // "local" was absent, because the application had no filesystem backend and
+    // a third option would have configured something that did not exist. Phase
+    // 2 implemented it.
+    //
+    // These are INFRASTRUCTURE choices, not driver names: `garage` and `s3` are
+    // two ways to have an S3 endpoint and both run STORAGE_DRIVER=s3. See
+    // localStorageInstall.test.ts for the mapping.
+    expect([...STORAGE_MODES].sort()).toEqual(["garage", "local", "s3"])
+    // Still not a driver name, and never will be.
     expect(STORAGE_MODES).not.toContain("filesystem")
   })
 
@@ -89,9 +95,14 @@ describe("defaults", () => {
 
   it("do not default storage to Garage outside Docker", () => {
     // Garage is a Compose service. Defaulting to it locally would produce a
-    // configuration that cannot work and that nobody chose.
+    // configuration that cannot work and that nobody chose. That rule is
+    // unchanged; what changed in Phase 3 is what a Local Node install gets
+    // INSTEAD. It used to be external S3 — which was not a preference, it was
+    // the only remaining option — and is now a local directory, which needs no
+    // account anywhere.
     expect(defaultsFor("docker").storage).toBe("garage")
-    expect(defaultsFor("local").storage).toBe("s3")
+    expect(defaultsFor("local").storage).toBe("local")
+    expect(defaultsFor("local").storage).not.toBe("garage")
   })
 
   it("fill in only what was not answered", () => {
@@ -111,7 +122,10 @@ describe("validation refuses what cannot work", () => {
     ["deploymentMode", "kubernetes"],
     ["packageManager", "cargo"],
     ["database", "oracle"],
-    ["storage", "local"],
+    // Was "local", which Phase 3 made a real storage mode. Replaced with a
+    // value that is still invented rather than deleting the case: the point is
+    // that an unknown enum member is refused, and that rule did not change.
+    ["storage", "dropbox"],
     ["redis", "memcached"],
   ])("rejects an invented %s", (field, value) => {
     expect(() => validateConfig(baseConfig({ [field]: value }))).toThrow(ConfigError)
@@ -143,7 +157,7 @@ describe("validation refuses what cannot work", () => {
   it("reports every problem at once, not the first", () => {
     // Three mistakes should cost one run, not three.
     try {
-      validateConfig(baseConfig({ database: "oracle", storage: "local", redis: "memcached" }))
+      validateConfig(baseConfig({ database: "oracle", storage: "dropbox", redis: "memcached" }))
       throw new Error("expected the configuration to be refused")
     } catch (error) {
       expect((error as ConfigError).problems.length).toBeGreaterThanOrEqual(3)
@@ -379,12 +393,16 @@ describe("storage configuration", () => {
 
   it("uses the application's own variable names, with no aliases", () => {
     const env = buildStorageEnv(baseConfig({ storage: "garage" }))
+    // STORAGE_DRIVER joined the list in Phase 3 and is written explicitly even
+    // though its absence already means "s3" — that default is an upgrade path
+    // for installations predating the variable, not a house style.
     expect(Object.keys(env).sort()).toEqual([
       "S3_ACCESS_KEY_ID",
       "S3_BUCKET",
       "S3_ENDPOINT",
       "S3_REGION",
       "S3_SECRET_ACCESS_KEY",
+      "STORAGE_DRIVER",
     ])
   })
 

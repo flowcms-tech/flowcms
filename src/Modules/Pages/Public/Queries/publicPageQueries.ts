@@ -3,10 +3,8 @@ import "server-only"
 import { and, eq } from "drizzle-orm"
 import { db } from "@/db/client"
 import { customPages } from "@/db/tables"
-import { StorageService } from "@/Framework/Storage/StorageService"
+import { publicImageUrl } from "@/Framework/Storage/publicImageUrl"
 import type { PublicCustomPage } from "@/Themes/contract/views"
-
-const IMAGE_URL_TTL_SECONDS = 3600
 
 /**
  * Defined on the theme contract since Phase 7.2. It used to be inferred from
@@ -33,9 +31,14 @@ export async function getPublishedPageByPath(path: string): Promise<PublicCustom
   })
   if (!row) return null
 
-  const ogImageUrl = row.ogImageKey
-    ? await StorageService.getPresignedDownloadUrl(row.ogImageKey, IMAGE_URL_TTL_SECONDS)
-    : null
+  // A PUBLIC surface, so the public image route rather than the admin one —
+  // and it was already wrong before that mattered. This used to be a presigned
+  // URL with a one-hour lifetime, handed to Facebook, LinkedIn and X as a page's
+  // og:image. Those crawlers refetch days or weeks later, by which time the
+  // signature is dead, which is exactly the failure `publicImageUrl.ts` was
+  // written to prevent for posts. `custom_page.ogImageKey` is already one of the
+  // keys `/api/public/images` authorises, so this needs no other change.
+  const ogImageUrl = row.ogImageKey ? publicImageUrl(row.ogImageKey) : null
 
   return { ...row, ogImageUrl }
 }

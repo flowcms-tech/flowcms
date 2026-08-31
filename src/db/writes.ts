@@ -39,10 +39,10 @@ import { db, databaseDialect } from "./client"
 type Row<T extends SQLiteTable> = T["$inferSelect"]
 type Insertable<T extends SQLiteTable> = T["$inferInsert"]
 
-function usesReturning(): boolean {
+function usesReturning(dialect: typeof databaseDialect = databaseDialect): boolean {
   // MariaDB's MySQL-compatible mode does not implement RETURNING for the
   // statements Drizzle's mysql2 driver emits, so it is grouped with MySQL.
-  return databaseDialect === "sqlite" || databaseDialect === "postgresql"
+  return dialect === "sqlite" || dialect === "postgresql"
 }
 
 /**
@@ -185,10 +185,38 @@ export async function deleteReturning<T extends SQLiteTable>(
 export async function upsert<T extends SQLiteTable>(
   table: T,
   values: Insertable<T>,
-  options: { target: unknown; set: Record<string, unknown> },
+  options: {
+    target: unknown
+    set: Record<string, unknown>
+    /**
+     * The handle to write through. Defaults to the application's.
+     *
+     * Injectable so a caller holding a DIFFERENT handle — a repository built
+     * over a temporary database in a test, say — still gets the dialect
+     * branching from here rather than reimplementing it. The alternative was to
+     * let such callers write their own `onConflictDoUpdate`, which
+     * `dialectIsolation.test.ts` forbids precisely because that syntax is
+     * SQLite/PostgreSQL only and fails on MySQL and MariaDB.
+     */
+    executor?: Pick<typeof db, "insert">
+    /**
+     * Which dialect that executor speaks.
+     *
+     * REQUIRED WHENEVER `executor` IS. The branch below is the whole reason
+     * this helper exists, and it used to read the APPLICATION's dialect even
+     * when handed somebody else's handle — so an injected MySQL executor was
+     * given `onConflictDoUpdate`, which the MySQL builder does not have, and
+     * the promise in the note above ("still gets the dialect branching from
+     * here") was not kept. Defaults to the application's, which is correct for
+     * every caller that does not inject one.
+     */
+    dialect?: typeof databaseDialect
+  },
 ): Promise<void> {
-  if (usesReturning()) {
-    await db
+  const executor = options.executor ?? db
+
+  if (usesReturning(options.dialect ?? databaseDialect)) {
+    await executor
       .insert(table)
       .values(values as never)
       .onConflictDoUpdate({ target: options.target as never, set: options.set as never })
@@ -197,7 +225,7 @@ export async function upsert<T extends SQLiteTable>(
 
   // The canonical type has no onDuplicateKeyUpdate, so this reaches for the
   // MySQL builder explicitly. Confined to this file by design.
-  const insert = db.insert(table).values(values as never) as unknown as {
+  const insert = executor.insert(table).values(values as never) as unknown as {
     onDuplicateKeyUpdate: (config: { set: Record<string, unknown> }) => Promise<unknown>
   }
   await insert.onDuplicateKeyUpdate({ set: options.set })

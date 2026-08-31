@@ -240,6 +240,7 @@ describe("the questions an operator actually answers", () => {
       nth(1), // local
       nth(0), // npm
       nth(0), // sqlite — no database URL needed
+      nth(1), // storage: external S3 (option 0 is the local filesystem)
       "https://s3.example.test" + ENTER,
       "eu-west-2" + ENTER,
       "my-bucket" + ENTER,
@@ -264,27 +265,46 @@ describe("the questions an operator actually answers", () => {
     expect(io.transcript()).not.toContain("the-secret-key-value")
   })
 
-  it("skips the storage question entirely in local mode", async () => {
-    // Garage is a Compose service, so outside Docker there is nothing to
-    // choose. Asking a question with one possible answer is worse than not
-    // asking it.
+  it("asks about storage in local mode, offering local and external S3", async () => {
+    // CHANGED IN PHASE 3. This used to assert the question was SKIPPED outside
+    // Docker, and that was right at the time: Garage is a Compose service, so
+    // external S3 was the only possible answer, and asking a question with one
+    // answer is worse than not asking it. There are now two real answers.
     const io = session([
-      nth(1), // local
-      nth(0),
-      nth(0),
-      "https://s3.example.test" + ENTER,
-      "eu-west-2" + ENTER,
-      "my-bucket" + ENTER,
-      "AKIA" + ENTER,
-      "secret" + ENTER,
-      nth(0),
+      nth(1), // local deployment
+      nth(0), // npm
+      nth(0), // sqlite
+      nth(0), // storage: local filesystem
+      nth(0), // no redis
       "/admin" + ENTER,
     ])
     const { answers, close } = await collectInteractively({}, io)
     close()
 
-    expect(answers.storage).toBe("s3")
-    expect(io.transcript()).not.toMatch(/Where do uploaded files go/)
+    expect(answers.storage).toBe("local")
+    expect(io.transcript()).toMatch(/Where do uploaded files go/)
+    // Choosing a directory must not then ask for a bucket. Prompting for
+    // credentials nothing will read is how an operator concludes they need an
+    // S3 account to run FlowCMS locally.
+    expect(answers.externalStorage).toBeUndefined()
+    expect(io.transcript()).not.toContain("Secret access key")
+  })
+
+  it("never offers Garage outside Docker", async () => {
+    // Garage is a Compose service. Offering it in a mode that runs no Compose
+    // would produce a configuration validation then rejects.
+    const io = session([
+      nth(1), // local deployment
+      nth(0), // npm
+      nth(0), // sqlite
+      nth(0), // storage
+      nth(0), // no redis
+      "/admin" + ENTER,
+    ])
+    const { close } = await collectInteractively({}, io)
+    close()
+
+    expect(io.transcript()).not.toMatch(/Garage/)
   })
 
   it("never puts a local database URL on screen", async () => {

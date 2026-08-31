@@ -33,7 +33,41 @@ export const settings = sqliteTable("settings", {
    *  overriding it here takes effect immediately — no rebuild required. */
   baseUrl: text("baseUrl"),
 
-  // -- Storage (S3-compatible) ----------------------------------------------
+  // -- ACTIVE STORAGE TOPOLOGY ----------------------------------------------
+  /**
+   * WHERE THIS INSTALLATION'S FILES ACTUALLY LIVE — the authoritative answer,
+   * and deliberately not the same thing as the deployment's environment.
+   *
+   * Before Phase 4 the active backend was read straight from `STORAGE_DRIVER`
+   * and friends on every request. That is fine for choosing a backend at
+   * install time and dangerous afterwards: editing one environment variable and
+   * restarting silently repointed a live site at a different, empty location.
+   * Every stored key stayed valid, nothing was copied, nothing warned, and
+   * every image was gone.
+   *
+   * So the environment BOOTSTRAPS an installation and this snapshot OWNS it
+   * from then on. Once `setupCompletedAt` is set, the first successful
+   * configuration resolution pins what is in use here; after that the
+   * environment is a candidate, not a command, and moving is a migration.
+   *
+   * CREDENTIALS ARE NOT HERE, ON PURPOSE. They live in `s3AccessKeyId` /
+   * `s3SecretAccessKey` (or the environment) exactly as before, so rotating a
+   * key is still an ordinary edit that moves no files. That separation is what
+   * makes `storageLocationId()` able to tell a rotation from a relocation.
+   */
+  activeStorageDriver: text("activeStorageDriver"),
+  /** `storageLocationId()` of the active topology. Credential-free by
+   *  construction, so it is safe to store, log and compare. */
+  activeStorageLocationId: text("activeStorageLocationId"),
+  activeStorageEndpoint: text("activeStorageEndpoint"),
+  activeStorageRegion: text("activeStorageRegion"),
+  activeStorageBucket: text("activeStorageBucket"),
+  /** Local driver only. */
+  activeStorageRoot: text("activeStorageRoot"),
+  /** When this topology became authoritative — first pin, or a cutover. */
+  activeStorageEstablishedAt: integer("activeStorageEstablishedAt", { mode: "timestamp_ms" }),
+
+  // -- Storage credentials (S3-compatible) ----------------------------------
   s3Endpoint: text("s3Endpoint"),
   s3Region: text("s3Region"),
   s3Bucket: text("s3Bucket"),

@@ -30,15 +30,29 @@ export const PACKAGE_MANAGERS = ["npm", "pnpm", "yarn", "bun"]
 export const DATABASES = ["sqlite", "postgresql", "mysql", "mariadb"]
 
 /**
- * `garage` is the bundled single-node S3 service; `s3` is any external
- * S3-compatible endpoint.
+ * WHAT INFRASTRUCTURE TO SET UP — not which runtime driver to run.
  *
- * There is deliberately no third option. FlowCMS has no local-filesystem media
- * backend — images are served through `/api/public/images` from object storage,
- * and adding a filesystem path here would be inventing a storage mode the
- * application does not implement.
+ *   garage  a bundled single-node S3 service, as a Compose container
+ *   s3      any external S3-compatible endpoint the operator already has
+ *   local   a directory on the machine running FlowCMS
+ *
+ * THESE ARE NOT DRIVER NAMES, and the difference is load-bearing. Garage and an
+ * external provider are different INFRASTRUCTURE running the SAME driver:
+ *
+ *   garage -> STORAGE_DRIVER=s3      s3 -> STORAGE_DRIVER=s3      local -> STORAGE_DRIVER=local
+ *
+ * `storageDriverFor()` in storage.mjs owns that mapping. Collapsing the two
+ * concepts into one enum would either lose the ability to bundle Garage or put
+ * a Garage-shaped branch back into the application — and the reason an operator
+ * can move from the bundled Garage to Cloudflare R2 by editing five environment
+ * variables is precisely that no such branch exists.
+ *
+ * `local` was added in Phase 3, when the application gained a filesystem
+ * driver. Before that this list had two members and a comment explaining that a
+ * third would be "inventing a storage mode the application does not implement".
+ * It now implements it.
  */
-export const STORAGE_MODES = ["garage", "s3"]
+export const STORAGE_MODES = ["garage", "s3", "local"]
 
 export const REDIS_MODES = ["none", "bundled", "external"]
 
@@ -69,13 +83,19 @@ export const DEFAULTS = {
 /**
  * Defaults that depend on another answer.
  *
- * Only storage does today: Garage is a Compose service, so it is not a default
- * anything outside Docker can honour.
+ * Only storage does today. Garage is a Compose service, so it is not a default
+ * anything outside Docker can honour — and a Local Node install now defaults to
+ * a directory rather than to an external provider.
+ *
+ * That default CHANGED in Phase 3, and the old one was never a preference: with
+ * no filesystem backend and Garage unavailable outside Docker, external S3 was
+ * the only thing left to name. Someone running `node server.js` should not need
+ * an object-storage account to store a picture.
  */
 export function defaultsFor(deploymentMode) {
   return {
     ...DEFAULTS,
-    storage: deploymentMode === "local" ? "s3" : "garage",
+    storage: deploymentMode === "local" ? "local" : "garage",
   }
 }
 
@@ -89,7 +109,7 @@ export function defaultsFor(deploymentMode) {
  * @property {"docker"|"local"} deploymentMode
  * @property {"npm"|"pnpm"|"yarn"|"bun"} packageManager
  * @property {"sqlite"|"postgresql"|"mysql"|"mariadb"} database
- * @property {"garage"|"s3"} storage
+ * @property {"garage"|"s3"|"local"} storage
  * @property {"none"|"bundled"|"external"} redis
  * @property {string} adminPath
  * @property {string} baseUrl

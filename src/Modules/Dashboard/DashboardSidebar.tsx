@@ -215,7 +215,7 @@ export default function DashboardSidebar({ brand, gscConnected, bingConnected }:
       <SidebarHeader>
         <div className="flex items-center gap-2 px-2 py-1.5">
           {brand.logoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- a presigned S3 URL, not a local/static asset
+            // eslint-disable-next-line @next/next/no-img-element -- an authenticated /api/media URL, not a local/static asset
             <img
               src={brand.logoUrl}
               alt=""

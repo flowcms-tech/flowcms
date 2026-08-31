@@ -2,18 +2,16 @@ import { NextRequest, NextResponse } from "next/server"
 import { asc, eq, inArray } from "drizzle-orm"
 import { db } from "@/db/client"
 import { authors, blogPosts } from "@/db/tables"
-import { StorageService } from "@/Framework/Storage/StorageService"
+import { mediaPath } from "@/Framework/Storage/mediaUrl"
 import { createAuthorSchema } from "@/Modules/Authors/Values/Validations"
 import { CacheService, ADMIN_CACHE_TTL_SECONDS } from "@/Framework/Redis/CacheService"
 import { recordActivity } from "@/db/activityLog"
 import { requireApiAuth } from "@/Framework/Auth/apiAuth"
 import { insertReturning } from "@/db/writes"
 
-const IMAGE_URL_TTL_SECONDS = 3600
-
 type AuthorRow = typeof authors.$inferSelect
 
-/** Admin payloads keep presigned URLs — the public image route is only for
+/** Admin payloads use the authenticated media route — the public image route is only for
  *  crawler-facing pages. */
 export async function serializeAuthors(rows: AuthorRow[]) {
   if (rows.length === 0) return []
@@ -40,7 +38,7 @@ export async function serializeAuthors(rows: AuthorRow[]) {
       avatarKey: row.avatarKey,
       avatarAltText: row.avatarAltText,
       avatarUrl: row.avatarKey
-        ? await StorageService.getPresignedDownloadUrl(row.avatarKey, IMAGE_URL_TTL_SECONDS)
+        ? mediaPath(row.avatarKey)
         : null,
       email: row.email,
       websiteUrl: row.websiteUrl,

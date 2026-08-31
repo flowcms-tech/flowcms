@@ -135,10 +135,11 @@ a file where the authoritative one is a guess.
 
 ### Storage
 
-`garage` or `s3`. **There is no third option and no local-filesystem media
-backend** — FlowCMS serves images from object storage through
-`/api/public/images`, so an uploads-directory choice would configure something
-the application does not implement.
+`garage`, `s3` or `local`. These are INFRASTRUCTURE choices, not driver names:
+`garage` and `s3` are two ways to have an S3 endpoint and both run
+`STORAGE_DRIVER=s3`, while `local` runs `STORAGE_DRIVER=local` and keeps uploads
+as files in a directory (`/data/uploads` under Docker, `./data/uploads`
+otherwise).
 
 Garage is **infrastructure, not a mode**. The application talks to
 `StorageService`, which talks S3, and cannot tell Garage from AWS. Nothing

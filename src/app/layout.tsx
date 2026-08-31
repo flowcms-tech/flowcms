@@ -11,9 +11,7 @@ import ElementToast from "@/components/shared/ElementToast/ElementToast"
 import { getBaseUrl, getBrand } from "@/Framework/Settings/SettingsService"
 import { getAdminPath } from "@/Framework/Config/adminPath"
 import { AdminPathProvider } from "@/Framework/Config/AdminPathProvider"
-import { StorageService } from "@/Framework/Storage/StorageService"
-
-const FAVICON_URL_TTL_SECONDS = 3600
+import { publicImageUrl } from "@/Framework/Storage/publicImageUrl"
 
 /**
  * The application typeface, admin panel included. Exposed as
@@ -36,9 +34,11 @@ const montserrat = Montserrat({
 
 export async function generateMetadata(): Promise<Metadata> {
   const [baseUrl, brand] = await Promise.all([getBaseUrl(), getBrand()])
-  const faviconUrl = brand.faviconKey
-    ? await StorageService.getPresignedDownloadUrl(brand.faviconKey, FAVICON_URL_TTL_SECONDS)
-    : null
+  // The favicon appears on every ANONYMOUS page, so it cannot come from the
+  // authenticated media route — and it must not be presigned either, which is
+  // what it used to be: a one-hour signature on an asset that a browser caches
+  // and a crawler refetches for months.
+  const faviconUrl = brand.faviconKey ? publicImageUrl(brand.faviconKey) : null
 
   return {
     // Without this, Next resolves relative metadata URLs against a localhost

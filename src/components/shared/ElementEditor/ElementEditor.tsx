@@ -166,7 +166,7 @@ async function uploadPastedImages(editor: TinyMCEEditorInstance, container: HTML
       try {
         const file = await dataUriToFile(img.src, filename)
         const uploaded = await FileManagerServices.upload(file, PASTE_UPLOAD_PREFIX)
-        // NOT `uploaded.thumbnailUrl` — that is a presigned S3 URL with a 1 h
+        // NOT `uploaded.thumbnailUrl` — that is an AUTHENTICATED /api/media URL
         // TTL, and this src is about to be saved into the post body and served
         // publicly for years. Using it meant every in-content image 404'd an
         // hour after it was written, silently, and no crawler ever saw one.
@@ -281,7 +281,8 @@ function Core({
           const editor = editorRef.current
           if (editor) {
             // Public route, not `item.thumbnailUrl` — see uploadPastedImages.
-            // A presigned URL persisted into the body dies within the hour.
+            // An admin-only /api/media URL persisted into the body 404s for
+            // every anonymous visitor.
             editor.insertContent(
               editor.dom.createHTML('img', { src: publicImagePath(item.id), alt: item.name })
             )

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { eq } from "drizzle-orm"
 import { db } from "@/db/client"
 import { blogCategories } from "@/db/tables"
-import { StorageService } from "@/Framework/Storage/StorageService"
+import { mediaPath } from "@/Framework/Storage/mediaUrl"
 import { updateBlogCategorySchema } from "@/Modules/Blog/Categories/Values/Validations"
 import { CacheService, ADMIN_CACHE_TTL_SECONDS } from "@/Framework/Redis/CacheService"
 import { getBlogCategoryPostCounts } from "@/db/taxonomyPostCounts"
@@ -11,14 +11,12 @@ import { TAXONOMY_FIELD_LABELS } from "@/Framework/Activity/fieldLabels"
 import { requireApiAuth } from "@/Framework/Auth/apiAuth"
 import { updateReturning } from "@/db/writes"
 
-const IMAGE_URL_TTL_SECONDS = 3600
-
 type CategoryRow = typeof blogCategories.$inferSelect
 
 async function serializeCategory(row: CategoryRow, depth = 0) {
   const [imageUrl, ogImageUrl, counts] = await Promise.all([
-    row.imageKey ? StorageService.getPresignedDownloadUrl(row.imageKey, IMAGE_URL_TTL_SECONDS) : Promise.resolve(null),
-    row.ogImageKey ? StorageService.getPresignedDownloadUrl(row.ogImageKey, IMAGE_URL_TTL_SECONDS) : Promise.resolve(null),
+    row.imageKey ? Promise.resolve(mediaPath(row.imageKey)) : Promise.resolve(null),
+    row.ogImageKey ? Promise.resolve(mediaPath(row.ogImageKey)) : Promise.resolve(null),
     getBlogCategoryPostCounts(row.id),
   ])
 

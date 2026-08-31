@@ -89,4 +89,35 @@ export async function register() {
     "@/Framework/Auth/authSecretConfig"
   )
   logAuthSecretProblem("startup configuration check", getAuthSecretConfig())
+
+  /**
+   * AN INTERRUPTED STORAGE CUTOVER — reconciled here, and NOT awaited.
+   *
+   * A cutover that was interrupted leaves its migration in `cutting_over`, and
+   * that job is the storage write lock: every upload in the application is
+   * refused while it stands. A process that restarts into that state has to
+   * resolve it, and it must not need an admin to open a page first — the people
+   * best placed to notice are the ones whose uploads have stopped working.
+   *
+   * NOT AWAITED, deliberately. `register()` blocks the server from accepting
+   * requests until it resolves, and this reads and writes the database, which is
+   * exactly the thing that may be slow or unreachable at boot. Blocking startup
+   * on it would turn a database that comes up ten seconds after the app into an
+   * app that serves nothing for ten seconds — including `/api/ready`, the one
+   * endpoint that could explain why.
+   *
+   * It is also not the only trigger. The same reconciliation runs whenever a
+   * storage write is refused by the lock and whenever the migration state is
+   * read, and every one of them is idempotent, so a failure here costs a delay
+   * rather than a repair. See Framework/Storage/storageRecoveryTrigger.ts.
+   */
+  // NODE RUNTIME ONLY. `register()` is compiled for the Edge runtime as well,
+  // because middleware runs there — and the recovery path reaches the database
+  // client, the storage drivers and `node:crypto`, none of which exist in Edge.
+  // Without this guard the Edge bundle pulls all of it in, warns about every
+  // Node built-in on the way, and the call could only ever fail there.
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { triggerStorageRecovery } = await import("@/Framework/Storage/storageRecoveryTrigger")
+    triggerStorageRecovery()
+  }
 }

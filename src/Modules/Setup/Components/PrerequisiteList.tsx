@@ -14,6 +14,10 @@ export type PrerequisiteState =
   | "ready"
   | "unavailable"
   | "not_configured"
+  // Something WAS set and is wrong — an unknown STORAGE_DRIVER, or a local
+  // driver with no path. Kept separate from `not_configured` because the
+  // operator's next action differs: fix a value, versus supply one.
+  | "misconfigured"
   | "migrations_pending"
   // Login CAPTCHA configuration (Phase 7.1.1). Deployment configuration, shown
   // here as a state and never editable from this page.
@@ -24,6 +28,7 @@ const LABELS: Record<PrerequisiteState, string> = {
   ready: "Ready",
   unavailable: "Unavailable",
   not_configured: "Not configured",
+  misconfigured: "Misconfigured",
   migrations_pending: "Migrations pending",
   missing: "Not configured",
   unsafe: "Not usable",
@@ -33,6 +38,9 @@ const TONES: Record<PrerequisiteState, string> = {
   ready: "text-emerald-500",
   unavailable: "text-red-500",
   not_configured: "text-amber-500",
+  // Red, not amber: an unconfigured install is an expected waypoint, a wrong
+  // value is a mistake that will not resolve itself.
+  misconfigured: "text-red-500",
   migrations_pending: "text-amber-500",
   missing: "text-amber-500",
   unsafe: "text-red-500",
@@ -67,11 +75,28 @@ export default function PrerequisiteList({
         <Row label="Login security" state={captcha} />
         <Row label="Authentication security" state={auth} />
       </ul>
-      {storage !== "ready" && (
+      {storage === "misconfigured" && (
         <p className="mt-3 text-xs text-muted-foreground">
-          FlowCMS stores all media in S3-compatible storage and has no local file backend, so
-          setup cannot complete until storage works. Check the deployment&apos;s storage
-          configuration, then reload this page.
+          The deployment&apos;s storage configuration is set to something FlowCMS does not
+          recognise. <code className="rounded bg-muted px-1 py-0.5">STORAGE_DRIVER</code> must be{" "}
+          <code className="rounded bg-muted px-1 py-0.5">s3</code> or{" "}
+          <code className="rounded bg-muted px-1 py-0.5">local</code> — a bundled Garage
+          deployment uses <code className="rounded bg-muted px-1 py-0.5">s3</code>, because Garage
+          is an S3-compatible server rather than a separate driver. A{" "}
+          <code className="rounded bg-muted px-1 py-0.5">local</code> deployment also needs{" "}
+          <code className="rounded bg-muted px-1 py-0.5">LOCAL_STORAGE_PATH</code>. Fix it,
+          restart, then reload this page.
+        </p>
+      )}
+      {(storage === "not_configured" || storage === "unavailable") && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          FlowCMS stores every uploaded file through its storage backend, so setup cannot
+          complete until that backend works. Check the deployment&apos;s{" "}
+          <code className="rounded bg-muted px-1 py-0.5">STORAGE_DRIVER</code> — either{" "}
+          <code className="rounded bg-muted px-1 py-0.5">local</code>, with a writable{" "}
+          <code className="rounded bg-muted px-1 py-0.5">LOCAL_STORAGE_PATH</code>, or{" "}
+          <code className="rounded bg-muted px-1 py-0.5">s3</code> with a reachable bucket — then
+          reload this page.
         </p>
       )}
       {captcha !== "ready" && (

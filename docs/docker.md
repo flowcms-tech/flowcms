@@ -111,7 +111,9 @@ docker run --rm -v flowcms_flowcms-data:/data -v "$PWD:/backup" \
 ```
 
 Back up `flowcms_garage-data` and `flowcms_garage-meta` the same way if you use
-the bundled Garage — the database references objects that live there.
+the bundled Garage — the database references objects that live there. With
+`STORAGE_DRIVER=local` there is nothing extra to back up: the uploads are inside
+`flowcms_flowcms-data` alongside the database.
 
 ## Health and readiness
 
@@ -140,7 +142,7 @@ it. Storage state is reported for operators and ignored by the verdict.
 |---|---|
 | `status` | `ready`, `not_ready` |
 | `database` | `ok`, `unavailable`, `migrations_pending` |
-| `storage` | `connected`, `not_configured`, `connection_failed` |
+| `storage` | `connected`, `not_configured`, `misconfigured`, `connection_failed` |
 
 These endpoints are unauthenticated, so they return states and nothing else —
 no hostnames, bucket names, credentials, or error text. Diagnose failures from
@@ -182,6 +184,49 @@ code. It never falls back to exposing `/admin-panel`.
 
 ## Storage
 
+FlowCMS has two storage drivers, selected by `STORAGE_DRIVER`:
+
+| `STORAGE_DRIVER` | Where files live | Extra variables |
+|---|---|---|
+| `s3` (default) | Any S3-compatible bucket, including the bundled Garage | `S3_*` |
+| `local` | A directory on the `/data` volume | `LOCAL_STORAGE_PATH` |
+
+**Garage is not a third driver.** It is an S3-compatible server, so a bundled
+Garage deployment runs `STORAGE_DRIVER=s3` pointed at `http://garage:3900`. The
+application cannot tell it apart from AWS or R2 — which is exactly why moving
+between them is an edit to five environment values and nothing more.
+
+**Omitting `STORAGE_DRIVER` means `s3`.** That default exists so installations
+created before the variable existed keep working after an upgrade; it is an
+upgrade path, not a recommendation.
+
+### Local filesystem
+
+```bash
+# .env
+STORAGE_DRIVER=local
+LOCAL_STORAGE_PATH=/data/uploads
+```
+
+```bash
+docker compose -f compose.yml -f compose.local-storage.yml up -d   # no Garage
+```
+
+Uploads become ordinary files under `/data/uploads`. **The path must stay under
+`/data`** — that is the `flowcms-data` named volume, already mounted, already
+created and chowned for the unprivileged runtime user, and already what you back
+up for the SQLite database. Any other directory in the container lives in the
+writable layer and is destroyed on the next `up`, silently: uploads work, then
+are simply gone.
+
+No second volume is created, deliberately. One volume is one thing to back up
+rather than two. The flip side is that `docker compose down -v` now destroys
+media **and** database together, where a Garage install kept them apart.
+
+**Single-node.** Two application replicas do not share this directory unless you
+have put it on a shared filesystem yourself. For more than one instance, use
+S3-compatible storage.
+
 ### Garage (bundled, default)
 
 Garage v2.3.0, single node, `replication_factor = 1`. It bootstraps itself with
@@ -192,8 +237,11 @@ credentials, recreate the layout, or touch existing objects.
 Credentials are **yours** — supplied through the environment rather than
 generated and printed to a log. FlowCMS reaches Garage at `http://garage:3900`
 over the Docker network; no Garage port is published. The browser never talks to
-object storage directly: images are served through `/api/public/images/…` and
-presigned URLs are generated server-side.
+object storage directly — every image is served through the application, at
+`/api/public/images/…` for published content and `/api/media/…` for the admin
+panel. That is load-bearing here rather than merely tidy: `garage` is a hostname
+that only resolves inside the Docker network, so a URL pointing a browser at it
+could never work.
 
 This is a single-node topology suitable for self-hosting, not a
 high-availability cluster. Production HA Garage is a separate operational
@@ -217,8 +265,130 @@ it.
 
 There is no Garage-specific code in FlowCMS. The storage layer speaks the S3 API
 with path-style addressing and does not know or care which implementation
-answers. You can equally leave storage unset and configure it later in
-**Admin → Settings → Global**, which takes precedence over the environment.
+answers.
+
+**Credentials** for the location you are already using can be changed in
+**Admin → Settings → Storage**, and take precedence over the environment.
+Rotating a key moves no files, so it applies immediately. The bucket, endpoint,
+region and local path are **not** editable there — see below.
+
+### Response checksums
+
+FlowCMS sets `responseChecksumValidation: "WHEN_REQUIRED"` on its S3 client,
+which turns off the AWS SDK's *optional* validation of a checksum returned with
+a GET. This is an interoperability fix, measured rather than assumed: several
+S3-compatible servers, including the bundled Garage, return a
+checksum-of-checksums for a multipart-uploaded object that the SDK then rejects,
+making the object unreadable. Only the response side is affected; uploads still
+send the checksums the SDK normally sends.
+
+Stated plainly so it is not over-read: **ordinary reads no longer get that
+opportunistic integrity check.** Migration is unaffected — it verifies every
+file by reading it back from the destination and comparing SHA-256, which is a
+stronger claim than the one being skipped, and it never trusts an ETag.
+
+## Changing where files live
+
+Moving an installation from one bucket to another, or between S3 and the local
+filesystem, is a **migration**, not a settings change. Editing `STORAGE_DRIVER`,
+`S3_BUCKET` or `LOCAL_STORAGE_PATH` on a running installation does **not** move
+anything and does not repoint the site: FlowCMS records which location an
+installation is using once setup completes, and from then on that record is
+authoritative. The environment describes a *candidate*.
+
+That is deliberate. Every stored key stays valid when you point an application
+at a different bucket — the new bucket is simply empty, so every image on the
+site disappears with no error and no way back except remembering the old value.
+
+If your environment and your active storage disagree, **Admin → Settings →
+Storage** says so explicitly and keeps using the recorded location. You can then
+start a migration *to* the configured destination, which is what the environment
+variables are for: preparing a destination, not switching to one.
+
+### Running a migration
+
+**Admin → Settings → Storage → Change storage.** The workflow is:
+
+1. **Configure a destination.** An S3-compatible destination is endpoint,
+   region, bucket, access key and secret. A **local** destination is whatever
+   `LOCAL_STORAGE_PATH` is set to — there is no path field, because a path typed
+   into a browser can point outside the persistent volume and that mistake is
+   invisible until the next restart takes every upload with it. To migrate to a
+   different directory, change the variable and restart first.
+2. **Test the destination.** FlowCMS writes a small file, reads it back,
+   compares it and deletes it. A credential that can list but not write would
+   otherwise fail thousands of objects into the transfer.
+3. **Choose a mode** (below). Neither is preselected.
+4. **Analyse both sides.** Every object on both sides is enumerated and
+   compared by SHA-256 — never by size, timestamp or ETag.
+5. **Transfer or verify**, in bounded batches on the server. You can close the
+   page; everything finished so far is saved and reopening resumes it.
+6. **Review anything blocked**, resolve it, re-run the analysis.
+7. **Confirm the cutover.** Storage is briefly read-only while FlowCMS catches
+   up on anything that changed since the analysis and commits the switch in a
+   single transaction.
+
+### Progress, pausing and resuming
+
+The analysis and the transfer run in **bounded batches on the server**, driven
+from the storage settings page. Every batch that finishes is written to the
+database before the next one starts, so:
+
+- **Closing the page pauses the migration safely.** Nothing is lost, nothing is
+  half-copied, and reopening the page resumes from exactly where it stopped.
+- It does **not** continue on its own while the page is closed. FlowCMS has no
+  background job runner, and inventing one that only lives inside a request
+  would lose work on the next restart rather than survive it.
+- A different admin, a different browser, or the same one an hour later can pick
+  the same migration up — the position is in the database, not in the tab.
+- The **cutover** is the exception: once confirmed it runs to completion in one
+  request, inside a bounded window. If it is interrupted, FlowCMS resolves it
+  from durable state on the next request — see the note at the end of this
+  section.
+
+For a large store this means leaving the tab open until the copy finishes, or
+returning to it periodically and pressing Resume.
+
+### The two modes
+
+| Mode | What FlowCMS does |
+|---|---|
+| **Migrate the files with FlowCMS** | Copies every file the destination is missing, reads each one back and checks it byte for byte, then reconciles anything that changed while it was running. |
+| **I have already migrated the files** | Copies **nothing**. Verifies that the destination holds every file with identical content, and refuses to switch if anything is missing or different. |
+
+Verify-only mode never writes to the destination — not during the analysis, not
+during the transfer pass, and not during the final reconciliation. If a file is
+missing it is reported and the migration blocks; FlowCMS will not quietly copy
+it, because that would hide the fact that your own migration was incomplete.
+
+### What a migration guarantees, and what it does not
+
+- **Your source is retained.** FlowCMS never empties a bucket, never deletes a
+  local directory, and never removes a source file — during the migration or
+  after it. Deleting the old location is yours to do, once you are satisfied.
+- **Keys are preserved exactly.** Every object keeps its key, so links in
+  published posts and pages, `/api/public/images/…` URLs, logos and favicons all
+  keep working. FlowCMS will not rename a key to make it fit a destination.
+- **Conflicts block.** A destination object with the same key and different
+  content is never overwritten. Resolve it at the destination and re-analyse.
+- **Extras are retained.** Objects already at the destination that are not at
+  the source are never deleted. They are reported, must be acknowledged before
+  the cutover, and will appear in the File Manager afterwards.
+- **Unrepresentable keys block.** A key a filesystem cannot hold — a Windows
+  reserved name, a trailing dot or space, or two keys that would collide on a
+  case-insensitive volume — stops the migration rather than being silently
+  renamed. If FlowCMS cannot determine how the destination treats upper and
+  lower case, it refuses to proceed rather than guess.
+- **There is no rollback.** After a cutover, uploads land at the new location,
+  so switching back would lose them. Returning means running another verified
+  migration in the other direction — the same workflow, in reverse.
+- **One at a time.** A second migration cannot be started while one is open.
+
+If the process restarts mid-cutover, FlowCMS resolves it from durable state on
+its own: the recorded location decides which storage is authoritative, a
+committed switch is never reverted, and a cutover interrupted before its
+transaction leaves the original storage active. If the active location matches
+neither side, it stops and says so rather than guessing.
 
 ## Redis
 

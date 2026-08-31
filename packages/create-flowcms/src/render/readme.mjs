@@ -1,7 +1,7 @@
 import { composeUpCommand } from "./compose.mjs"
 import { LOCKFILES, localInstallCommand } from "./dockerfile.mjs"
 import { describeDatabase } from "../config/database.mjs"
-import { describeStorage } from "../config/storage.mjs"
+import { describeStorage, localStoragePathFor } from "../config/storage.mjs"
 import { describeRedis } from "../config/redis.mjs"
 
 /**
@@ -84,10 +84,22 @@ export function buildReadme(config) {
 
     if (config.storage === "s3") {
       lines.push(
-        "**Storage is external.** FlowCMS has no local-filesystem media backend —",
-        "uploads always go to S3-compatible object storage. Your `.env` points at",
-        "the endpoint you gave; if it is not reachable, the site still starts and",
-        "reports storage as not configured, and uploads fail.",
+        "**Storage.** Uploads go to the S3-compatible endpoint you gave, via",
+        "`STORAGE_DRIVER=s3`. If it is not reachable the site still starts and",
+        "reports storage as not configured; uploads fail until it is.",
+        "",
+      )
+    }
+
+    if (config.storage === "local") {
+      lines.push(
+        "**Storage.** Uploads are files in `" + localStoragePathFor(config.deploymentMode) + "`,",
+        "via `STORAGE_DRIVER=local`. Back that directory up alongside your database:",
+        "it holds every uploaded image.",
+        "",
+        "This is **single-node**. A second FlowCMS instance does not share the",
+        "directory unless you put it on a shared filesystem yourself; for multiple",
+        "replicas use S3-compatible storage instead.",
         "",
       )
     }
