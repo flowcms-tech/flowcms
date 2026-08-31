@@ -107,14 +107,41 @@ export function windowExpired(job: MigrationRow, now: Date = new Date()): boolea
  * destination, and a recovery that ran after a partial failure would need it.
  * Clearing it is a separate step after the commit is known to have succeeded.
  */
+/**
+ * The pieces this transaction writes through.
+ *
+ * INJECTABLE, ADDED IN PHASE 4C AND FOR A REASON WORTH STATING. Phase 4b2 could
+ * not test this function: it closed over the application database, so the live
+ * end-to-end run had to reimplement the transaction inline and assert on the
+ * copy — which proves the shape of a transaction that is not the one that runs
+ * in production. With the executor as a parameter, the same code an
+ * installation cuts over with is the code the test drives against a real
+ * temporary database.
+ *
+ * The default is the real application, so nothing about a production cutover
+ * changes.
+ */
+export interface CutoverStore {
+  db: typeof db
+  settings: typeof settings
+  migrations: typeof storageMigrations
+  invalidate: () => Promise<void>
+}
+
+function defaultStore(): CutoverStore {
+  return { db, settings, migrations: storageMigrations, invalidate: invalidateSettingsCache }
+}
+
 export async function commitCutover(
   job: MigrationRow,
   destination: ResolvedStorageConfig,
+  store: CutoverStore = defaultStore(),
 ): Promise<void> {
+  const { settings, migrations: storageMigrations } = store
   const locationId = storageLocationId(destination)
   const now = new Date()
 
-  await db.transaction(async (tx) => {
+  await store.db.transaction(async (tx) => {
     const activeColumns: Record<string, unknown> = {
       activeStorageDriver: destination.driver,
       activeStorageLocationId: locationId,
@@ -176,7 +203,7 @@ export async function commitCutover(
   // If this throws, the database already says destination — and that is the
   // authority. Recovery re-invalidates rather than reverting, because reverting
   // after the destination became authoritative could lose writes made to it.
-  await invalidateSettingsCache()
+  await store.invalidate()
 }
 
 /**
@@ -240,8 +267,12 @@ export function assessRecovery(
  * for it to leak from, and after cutover it is redundant: the same credentials
  * now live in the settings row that every other part of FlowCMS reads.
  */
-export async function clearMigrationCredentials(migrationId: string): Promise<void> {
-  await db
+export async function clearMigrationCredentials(
+  migrationId: string,
+  store: CutoverStore = defaultStore(),
+): Promise<void> {
+  const storageMigrations = store.migrations
+  await store.db
     .update(storageMigrations)
     .set({ destinationAccessKeyId: null, destinationSecretAccessKey: null, updatedAt: new Date() })
     .where(and(eq(storageMigrations.id, migrationId), eq(storageMigrations.status, "completed")))

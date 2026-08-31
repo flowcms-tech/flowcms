@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, notInArray, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNull, lt, ne, notInArray, sql } from "drizzle-orm"
 import { upsert } from "@/db/writes"
 import type { db as AppDb } from "@/db/client"
 import type { storageMigrations as MigrationsTable, storageMigrationEntries as EntriesTable } from "@/db/tables"
@@ -72,6 +72,25 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
       .select()
       .from(migrations)
       .where(notInArray(migrations.status, [...TERMINAL_STATUSES]))
+      .limit(1)
+    return (rows[0] as MigrationRow | undefined) ?? null
+  }
+
+  /**
+   * The most recently completed relocation.
+   *
+   * Read for the storage screen only. After a cutover `findActive` correctly
+   * returns nothing — the job is terminal — and an operator who has just moved
+   * their whole media library deserves better than a screen that says nothing
+   * happened. It is also where "the previous storage was retained" is stated,
+   * which is the fact that makes the switch survivable.
+   */
+  async function findLastCompleted(): Promise<MigrationRow | null> {
+    const rows = await db
+      .select()
+      .from(migrations)
+      .where(eq(migrations.status, "completed"))
+      .orderBy(desc(migrations.cutoverAt))
       .limit(1)
     return (rows[0] as MigrationRow | undefined) ?? null
   }
@@ -186,6 +205,40 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
   }
 
   /**
+   * Writes fields WITHOUT claiming a status change.
+   *
+   * SEPARATE FROM `transition` BECAUSE NOT EVERY FACT IS A STATE. Recording
+   * that an operator acknowledged the destination’s extra files does not move
+   * the job anywhere — and routing it through `transition` would mean asking
+   * the state machine whether `ready_to_cutover` may become `ready_to_cutover`,
+   * which it correctly refuses: a self-loop is meaningful for the states that
+   * repeat a batch and meaningless for the ones that wait for a human.
+   *
+   * Keeps the SAME optimistic concurrency guard, so two admins acknowledging
+   * different views of the destination cannot both win.
+   */
+  async function patch(
+    id: string,
+    expectedVersion: number,
+    fields: Partial<MigrationRow>,
+  ): Promise<MigrationRow> {
+    const result = await db
+      .update(migrations)
+      .set({ ...fields, version: expectedVersion + 1, updatedAt: new Date() })
+      .where(and(eq(migrations.id, id), eq(migrations.version, expectedVersion)))
+
+    const affected = result as unknown as { rowsAffected?: number; rowCount?: number }
+    if ((affected.rowsAffected ?? affected.rowCount ?? 0) !== 1) {
+      throw new MigrationTransitionError(
+        "version_conflict",
+        "That migration changed while this request was working on it. Reload and try again.",
+      )
+    }
+
+    return (await findById(id))!
+  }
+
+  /**
    * Records inventory progress WITHOUT changing status.
    *
    * Separate from `transition` because an inventory batch is the same status
@@ -213,6 +266,8 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
     migrationId: string,
     entry: {
       key: string
+      /** How the DESTINATION would distinguish this key. See the schema note. */
+      normalizedKey?: string | null
       kind: "file" | "directory"
       classification: string
       state: string
@@ -229,6 +284,7 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
     const values = {
       migrationId,
       key: entry.key,
+      normalizedKey: entry.normalizedKey ?? null,
       kind: entry.kind,
       classification: entry.classification,
       state: entry.state,
@@ -254,6 +310,7 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
         target: [entries.migrationId, entries.key],
         executor: db,
         set: {
+          normalizedKey: values.normalizedKey,
           kind: values.kind,
           classification: values.classification,
           state: values.state,
@@ -378,6 +435,17 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
       destinationHash?: string | null
       detail?: string | null
       incrementAttempts?: boolean
+      /**
+       * RESTATES THE BASELINE, and only final reconciliation passes these.
+       *
+       * When the delta finds a source file that changed and re-copies it, the
+       * recorded baseline hash still describes the OLD bytes. Leaving it would
+       * make the very next delta report the same file as changed again — a
+       * cutover that could never converge.
+       */
+      classification?: string
+      sourceSize?: number | null
+      sourceHash?: string | null
     },
   ): Promise<void> {
     const patch: Record<string, unknown> = {
@@ -399,6 +467,10 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
     if (outcome.incrementAttempts) {
       patch.attempts = sql`${entries.attempts} + 1`
     }
+
+    if (outcome.classification !== undefined) patch.classification = outcome.classification
+    if (outcome.sourceSize !== undefined) patch.sourceSize = outcome.sourceSize
+    if (outcome.sourceHash !== undefined) patch.sourceHash = outcome.sourceHash
 
     await db
       .update(entries)
@@ -449,6 +521,163 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
     return rows[0] ?? null
   }
 
+  /**
+   * Anything already claiming the path this key would take at the destination.
+   *
+   * A COLLISION IS A PROPERTY OF A SET, AND THE SET DOES NOT FIT IN ONE
+   * REQUEST. Inventory runs in bounded batches, so an in-memory scanner sees
+   * only the keys of the batch it is running: `Photo.png` in batch one and
+   * `photo.png` in batch four would both pass, and on a case-insensitive
+   * destination the second would overwrite the first while the migration
+   * reported success.
+   *
+   * One indexed lookup per key answers it for the whole job instead.
+   */
+  async function findByNormalizedKey(migrationId: string, normalizedKey: string, exceptKey: string) {
+    return db
+      .select()
+      .from(entries)
+      .where(
+        and(
+          eq(entries.migrationId, migrationId),
+          eq(entries.normalizedKey, normalizedKey),
+          ne(entries.key, exceptKey),
+        ),
+      )
+      .limit(1)
+  }
+
+  /** A targeted correction to one entry. Used when a later key reveals that an
+   *  already-recorded one is not representable after all. */
+  async function markEntry(
+    migrationId: string,
+    key: string,
+    patch: { classification?: string; state?: string; detail?: string | null },
+  ): Promise<void> {
+    await db
+      .update(entries)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(and(eq(entries.migrationId, migrationId), eq(entries.key, key)))
+  }
+
+  /**
+   * Resolves rows the current inventory pass did not see.
+   *
+   * A re-run must not leave behind entries for keys since deleted from the
+   * source: they would sit as unprocessed work and block readiness forever.
+   * But an entry THIS MIGRATION ALREADY WROTE TO THE DESTINATION cannot simply
+   * be deleted — losing the ownership flag would either strand a stale
+   * destination object or, worse, license deleting one the migration never
+   * owned. So the two cases are separated:
+   *
+   *   never written by us  ->  the row is bookkeeping; remove it
+   *   written by us        ->  the destination holds a copy of something that
+   *                            no longer exists at the source. Recorded as
+   *                            `source_deleted` so final reconciliation removes
+   *                            the copy it owns.
+   */
+  async function resolveUnseenEntries(migrationId: string, seenSince: Date): Promise<void> {
+    await db
+      .update(entries)
+      .set({ state: "source_deleted", updatedAt: new Date() })
+      .where(
+        and(
+          eq(entries.migrationId, migrationId),
+          lt(entries.updatedAt, seenSince),
+          eq(entries.createdByMigration, true),
+        ),
+      )
+
+    await db
+      .delete(entries)
+      .where(
+        and(
+          eq(entries.migrationId, migrationId),
+          lt(entries.updatedAt, seenSince),
+          eq(entries.createdByMigration, false),
+        ),
+      )
+  }
+
+  /**
+   * Every entry, as the final delta and final verification need them.
+   *
+   * Ordered by key so a report is stable between reads. The whole set is loaded
+   * because the delta compares against ALL of it — bounded by the size of the
+   * store, which is the same bound the inventory that produced it had.
+   */
+  async function baselineEntries(migrationId: string) {
+    return db
+      .select()
+      .from(entries)
+      .where(eq(entries.migrationId, migrationId))
+      .orderBy(asc(entries.key))
+  }
+
+  /**
+   * A page of the entry report.
+   *
+   * PAGINATED AT THE DATABASE, not sliced after loading. A store with half a
+   * million objects would otherwise turn one admin page load into half a
+   * million rows serialised into a JSON response.
+   */
+  async function listEntries(
+    migrationId: string,
+    filter: { classification?: string; state?: string },
+    page: { limit: number; offset: number },
+  ) {
+    const conditions = [eq(entries.migrationId, migrationId)]
+    if (filter.classification) conditions.push(eq(entries.classification, filter.classification))
+    if (filter.state) conditions.push(eq(entries.state, filter.state))
+
+    return db
+      .select()
+      .from(entries)
+      .where(and(...conditions))
+      .orderBy(asc(entries.key))
+      .limit(page.limit)
+      .offset(page.offset)
+  }
+
+  async function countEntriesMatching(
+    migrationId: string,
+    filter: { classification?: string; state?: string },
+  ): Promise<number> {
+    const conditions = [eq(entries.migrationId, migrationId)]
+    if (filter.classification) conditions.push(eq(entries.classification, filter.classification))
+    if (filter.state) conditions.push(eq(entries.state, filter.state))
+
+    const rows = await db
+      .select({ n: sql<number>`count(*)` })
+      .from(entries)
+      .where(and(...conditions))
+    return Number(rows[0]?.n ?? 0)
+  }
+
+  /**
+   * Returns `failed` entries to `pending` so a retry can claim them.
+   *
+   * DELIBERATELY NARROW. `blocked` is not included: a conflict or an
+   * incompatible key is not a transient network error, and a Retry button that
+   * quietly re-attempted them would either loop forever or, if it ever
+   * "succeeded", would have overwritten somebody else’s file.
+   */
+  async function retryFailedEntries(migrationId: string): Promise<number> {
+    const rows = await db
+      .select({ id: entries.id })
+      .from(entries)
+      .where(and(eq(entries.migrationId, migrationId), eq(entries.state, "failed")))
+
+    if (rows.length === 0) return 0
+
+    await db
+      .update(entries)
+      .set({ state: "pending", detail: null, claimedBy: null, claimedAt: null, updatedAt: new Date() })
+      .where(and(eq(entries.migrationId, migrationId), eq(entries.state, "failed")))
+
+    return rows.length
+  }
+
   /** Cancelling is a transition like any other, and durable. */
   async function cancel(id: string, expectedVersion: number, reason?: string) {
     return transition(id, expectedVersion, "cancelled", {
@@ -458,7 +687,16 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
 
   return {
     findActive,
+    findLastCompleted,
     findById,
+    patch,
+    findByNormalizedKey,
+    markEntry,
+    resolveUnseenEntries,
+    baselineEntries,
+    listEntries,
+    countEntriesMatching,
+    retryFailedEntries,
     create,
     transition,
     saveProgress,

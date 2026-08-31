@@ -277,6 +277,28 @@ describe("editor", () => {
     }
   })
 
+  it("cannot see or drive a storage migration, in either direction", () => {
+    // Migration is the most destructive thing the admin panel can start, and
+    // the READ side matters as much as the write side: the status response
+    // names the destination bucket and endpoint, and the entry report is a
+    // complete index of every object key in the store.
+    for (const pattern of [
+      "settings/storage/migration",
+      "settings/storage/migration/destination-test",
+      "settings/storage/migration/inventory",
+      "settings/storage/migration/advance",
+      "settings/storage/migration/entries",
+      "settings/storage/migration/cutover",
+    ]) {
+      for (const role of ["contributor", "editor"] as const) {
+        for (const method of METHODS) {
+          expect(allows(pattern, method, role), `${pattern} ${method} as ${role}`).toBe(false)
+        }
+      }
+      expect(allows(pattern, "GET", "admin"), `${pattern} GET as admin`).toBe(true)
+    }
+  })
+
   it("reads Bing crawl statistics but cannot change the crawl rate", () => {
     expect(allows("integrations/bing-webmaster/crawl", "GET", "editor")).toBe(true)
     expect(allows("integrations/bing-webmaster/crawl", "PATCH", "editor")).toBe(false)

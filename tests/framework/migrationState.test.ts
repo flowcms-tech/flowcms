@@ -144,9 +144,31 @@ describe("cancellation", () => {
 
   it("is NOT available once the cutover window is open", () => {
     // "Cancel" has no coherent meaning mid-switch: either the topology moved or
-    // it did not. The only ways out are forward or failed.
+    // it did not.
     expect(canTransition("cutting_over", "cancelled")).toBe(false)
-    expect([...allowedTransitionsFrom("cutting_over")].sort()).toEqual(["completed", "failed"])
+    expect([...allowedTransitionsFrom("cutting_over")].sort()).toEqual([
+      "completed",
+      "failed",
+      // THE RELEASE EDGE, added in Phase 4c. A cutover that stopped because the
+      // final delta was too large, or because its window ran out, changed
+      // nothing at all: the source is still authoritative and the destination
+      // still holds the work already done there. Before this edge existed the
+      // lock could only be given up by failing the job, which threw away a
+      // migration that was simply unfinished.
+      //
+      // It is NOT a cancel in disguise. `performCutover` takes it only after
+      // confirming from the active snapshot that nothing was switched, and the
+      // job lands back on `ready_to_cutover` — resumable, not stopped.
+      "ready_to_cutover",
+    ])
+  })
+
+  it("cannot become cancelled through the release edge either", () => {
+    // The release goes to `ready_to_cutover`, which CAN be cancelled — but that
+    // is a second, deliberate operator action taken once storage is unlocked
+    // again, not something a stopped cutover does on its own.
+    expect(canTransition("cutting_over", "cancelled")).toBe(false)
+    expect(canTransition("ready_to_cutover", "cancelled")).toBe(true)
   })
 
   it("leaves the source authoritative", () => {

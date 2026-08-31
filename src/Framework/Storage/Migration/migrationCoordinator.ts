@@ -183,6 +183,20 @@ export async function advanceMigration(
   // failed, and those copies really happened — the destination has the bytes.
   // Per-entry writes mean progress survives whatever went wrong.
   for (const outcome of outcomes) {
+    // A VERIFIED COPY RESTATES THE BASELINE, and Phase 4c found out why the
+    // hard way. Inventory records no hash for a file the destination does not
+    // have — there is nothing to compare it against yet, so reading the whole
+    // source twice would be waste. The engine then hashes the source WHILE it
+    // streams it and proves the destination holds those exact bytes, so after a
+    // verified copy the hash is known for free.
+    //
+    // Without writing it back, every copied file kept a null baseline hash, and
+    // `computeFinalDelta` treats a null hash as "changed rather than assume" —
+    // so the final delta reported EVERY file in the store as changed, blew past
+    // `MAX_FINAL_DELTA_ENTRIES`, and the cutover could never converge.
+    const provenHash =
+      outcome.state === "verified" && outcome.destinationHash ? outcome.destinationHash : undefined
+
     await repository.saveOutcome(migrationId, outcome.key, {
       state: outcome.state,
       createdByMigration: outcome.createdByMigration,
@@ -190,6 +204,9 @@ export async function advanceMigration(
       destinationHash: outcome.destinationHash ?? null,
       detail: outcome.detail ?? null,
       incrementAttempts: outcome.state === "failed",
+      ...(provenHash
+        ? { sourceHash: provenHash, sourceSize: outcome.destinationSize ?? null }
+        : {}),
     })
   }
 

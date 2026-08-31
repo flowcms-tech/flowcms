@@ -265,8 +265,109 @@ it.
 
 There is no Garage-specific code in FlowCMS. The storage layer speaks the S3 API
 with path-style addressing and does not know or care which implementation
-answers. You can equally leave storage unset and configure it later in
-**Admin → Settings → Global**, which takes precedence over the environment.
+answers.
+
+**Credentials** for the location you are already using can be changed in
+**Admin → Settings → Storage**, and take precedence over the environment.
+Rotating a key moves no files, so it applies immediately. The bucket, endpoint,
+region and local path are **not** editable there — see below.
+
+### Response checksums
+
+FlowCMS sets `responseChecksumValidation: "WHEN_REQUIRED"` on its S3 client,
+which turns off the AWS SDK's *optional* validation of a checksum returned with
+a GET. This is an interoperability fix, measured rather than assumed: several
+S3-compatible servers, including the bundled Garage, return a
+checksum-of-checksums for a multipart-uploaded object that the SDK then rejects,
+making the object unreadable. Only the response side is affected; uploads still
+send the checksums the SDK normally sends.
+
+Stated plainly so it is not over-read: **ordinary reads no longer get that
+opportunistic integrity check.** Migration is unaffected — it verifies every
+file by reading it back from the destination and comparing SHA-256, which is a
+stronger claim than the one being skipped, and it never trusts an ETag.
+
+## Changing where files live
+
+Moving an installation from one bucket to another, or between S3 and the local
+filesystem, is a **migration**, not a settings change. Editing `STORAGE_DRIVER`,
+`S3_BUCKET` or `LOCAL_STORAGE_PATH` on a running installation does **not** move
+anything and does not repoint the site: FlowCMS records which location an
+installation is using once setup completes, and from then on that record is
+authoritative. The environment describes a *candidate*.
+
+That is deliberate. Every stored key stays valid when you point an application
+at a different bucket — the new bucket is simply empty, so every image on the
+site disappears with no error and no way back except remembering the old value.
+
+If your environment and your active storage disagree, **Admin → Settings →
+Storage** says so explicitly and keeps using the recorded location. You can then
+start a migration *to* the configured destination, which is what the environment
+variables are for: preparing a destination, not switching to one.
+
+### Running a migration
+
+**Admin → Settings → Storage → Change storage.** The workflow is:
+
+1. **Configure a destination.** An S3-compatible destination is endpoint,
+   region, bucket, access key and secret. A **local** destination is whatever
+   `LOCAL_STORAGE_PATH` is set to — there is no path field, because a path typed
+   into a browser can point outside the persistent volume and that mistake is
+   invisible until the next restart takes every upload with it. To migrate to a
+   different directory, change the variable and restart first.
+2. **Test the destination.** FlowCMS writes a small file, reads it back,
+   compares it and deletes it. A credential that can list but not write would
+   otherwise fail thousands of objects into the transfer.
+3. **Choose a mode** (below). Neither is preselected.
+4. **Analyse both sides.** Every object on both sides is enumerated and
+   compared by SHA-256 — never by size, timestamp or ETag.
+5. **Transfer or verify**, in bounded batches on the server. You can close the
+   page; everything finished so far is saved and reopening resumes it.
+6. **Review anything blocked**, resolve it, re-run the analysis.
+7. **Confirm the cutover.** Storage is briefly read-only while FlowCMS catches
+   up on anything that changed since the analysis and commits the switch in a
+   single transaction.
+
+### The two modes
+
+| Mode | What FlowCMS does |
+|---|---|
+| **Migrate the files with FlowCMS** | Copies every file the destination is missing, reads each one back and checks it byte for byte, then reconciles anything that changed while it was running. |
+| **I have already migrated the files** | Copies **nothing**. Verifies that the destination holds every file with identical content, and refuses to switch if anything is missing or different. |
+
+Verify-only mode never writes to the destination — not during the analysis, not
+during the transfer pass, and not during the final reconciliation. If a file is
+missing it is reported and the migration blocks; FlowCMS will not quietly copy
+it, because that would hide the fact that your own migration was incomplete.
+
+### What a migration guarantees, and what it does not
+
+- **Your source is retained.** FlowCMS never empties a bucket, never deletes a
+  local directory, and never removes a source file — during the migration or
+  after it. Deleting the old location is yours to do, once you are satisfied.
+- **Keys are preserved exactly.** Every object keeps its key, so links in
+  published posts and pages, `/api/public/images/…` URLs, logos and favicons all
+  keep working. FlowCMS will not rename a key to make it fit a destination.
+- **Conflicts block.** A destination object with the same key and different
+  content is never overwritten. Resolve it at the destination and re-analyse.
+- **Extras are retained.** Objects already at the destination that are not at
+  the source are never deleted. They are reported, must be acknowledged before
+  the cutover, and will appear in the File Manager afterwards.
+- **Unrepresentable keys block.** A key a filesystem cannot hold — a Windows
+  reserved name, a trailing dot or space, or two keys that would collide on a
+  case-insensitive volume — stops the migration rather than being silently
+  renamed. If FlowCMS cannot determine how the destination treats upper and
+  lower case, it refuses to proceed rather than guess.
+- **There is no rollback.** After a cutover, uploads land at the new location,
+  so switching back would lose them. Returning means running another verified
+  migration in the other direction — the same workflow, in reverse.
+- **One at a time.** A second migration cannot be started while one is open.
+
+If the process restarts mid-cutover, FlowCMS resolves it from durable state on
+its own: the recorded location decides which storage is authoritative, a
+committed switch is never reverted, and a cutover interrupted before its
+transaction leaves the original storage active. If the active location matches
+neither side, it stops and says so rather than guessing.
 
 ## Redis
 

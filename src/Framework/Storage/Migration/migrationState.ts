@@ -93,8 +93,26 @@ const TRANSITIONS: Record<MigrationStatus, readonly MigrationStatus[]> = {
   ready: ["copying", "verifying", "inventorying", "blocked", "failed", "cancelled"],
   copying: ["copying", "verifying", "blocked", "failed", "cancelled"],
   verifying: ["verifying", "ready_to_cutover", "blocked", "failed", "cancelled"],
-  ready_to_cutover: ["cutting_over", "verifying", "blocked", "failed", "cancelled"],
-  cutting_over: ["completed", "failed"],
+  // `inventorying` is here for the same reason `ready` has it: an operator who
+  // has resolved something at either end must be able to ask for a fresh
+  // analysis. Without the edge, the only way to re-check a job that had reached
+  // `ready_to_cutover` would be to cancel it and start again from an empty
+  // destination, throwing away every byte already copied. Re-analysing is
+  // always safe: it reads both stores and writes nothing to either.
+  ready_to_cutover: ["cutting_over", "verifying", "inventorying", "blocked", "failed", "cancelled"],
+  // `ready_to_cutover` is the RELEASE edge, added in Phase 4c because without it
+  // the lock could only be given up by failing the job. A cutover that stops
+  // because the final delta was too large, or because the window ran out, has
+  // changed nothing at all — the source is still authoritative and the
+  // destination still holds the work already done there. Marking that
+  // `failed` would throw away a migration that is simply not finished, and
+  // force the operator to start again from an empty destination.
+  //
+  // It is not a general escape hatch: `performCutover` takes it only after
+  // confirming from the ACTIVE TOPOLOGY that nothing was switched. There is
+  // still no edge to `cancelled`, because a "cancel" arriving mid-switch has no
+  // coherent meaning.
+  cutting_over: ["completed", "failed", "ready_to_cutover"],
   completed: [],
   failed: [],
   cancelled: [],
@@ -148,11 +166,23 @@ export type EntryClassification = (typeof ENTRY_CLASSIFICATIONS)[number]
 export const ENTRY_STATES = [
   "pending",
   "hashed",
+  "copying",
   "copied",
   "verified",
   "blocked",
   "failed",
+  "source_changed",
   "source_deleted",
+  /**
+   * Settled by the final reconciliation, with nothing left to do.
+   *
+   * Distinct from `verified` because nothing was verified: the source object is
+   * gone. Either the copy this migration made was removed with it, or the
+   * destination object was not ours and has been left alone as an extra. Both
+   * are finished facts, and neither may block a cutover — which is exactly what
+   * `source_deleted` does, correctly, right up until it is resolved.
+   */
+  "reconciled",
 ] as const
 export type EntryState = (typeof ENTRY_STATES)[number]
 

@@ -127,9 +127,37 @@ export const storageMigrations = sqliteTable("storage_migration", {
   /** Operator acknowledgement that destination-only objects will become
    *  visible in the File Manager after cutover. Required to leave `ready`. */
   extrasAcknowledged: integer("extrasAcknowledged", { mode: "boolean" }).notNull().default(false),
+  extrasAcknowledgedAt: integer("extrasAcknowledgedAt", { mode: "timestamp_ms" }),
+
+  /**
+   * HOW MANY extras were acknowledged, so the acknowledgement can EXPIRE.
+   *
+   * A boolean alone cannot. An operator who acknowledges three destination-only
+   * files, then re-runs inventory against a destination that has since grown to
+   * three hundred, would carry the old acknowledgement into a cutover they were
+   * never shown. Recording the count that was agreed to turns "still
+   * acknowledged" into a comparison against what is there now, rather than a
+   * flag somebody set once.
+   */
+  extrasAcknowledgedCount: integer("extrasAcknowledgedCount").notNull().default(0),
 
   /** Redacted operator-facing failure text. Never contains a credential. */
   failureReason: text("failureReason"),
+
+  /**
+   * When the CURRENT inventory pass started.
+   *
+   * The boundary that separates "seen by this scan" from "left over from the
+   * last one". Inventory is re-runnable — an operator resolves a conflict at
+   * the destination and asks for another pass — and a re-run must not leave
+   * behind rows for keys that have since been deleted from the source: they
+   * would sit there as unprocessed work and block readiness forever.
+   *
+   * Comparing each entry`s updatedAt against this timestamp is what makes
+   * "this scan did not see it" answerable at the end of the pass. `updatedAt` on
+   * the job cannot do it: every batch moves it.
+   */
+  inventoryStartedAt: integer("inventoryStartedAt", { mode: "timestamp_ms" }),
 
   /** When the baseline pass finished — the boundary the final delta is against. */
   baselineCompletedAt: integer("baselineCompletedAt", { mode: "timestamp_ms" }),
@@ -182,6 +210,27 @@ export const storageMigrationEntries = sqliteTable(
 
     /** The object key, byte-identical on both sides. Never rewritten. */
     key: text("key").notNull(),
+
+    /**
+     * The key as the DESTINATION would distinguish it — lower-cased when the
+     * destination filesystem is case-insensitive, trailing slash removed.
+     *
+     * PERSISTED BECAUSE A COLLISION IS A PROPERTY OF A SET, AND THE SET DOES
+     * NOT FIT IN ONE REQUEST. Inventory runs in bounded batches, so an
+     * in-memory scanner that notices `Photo.png` and `photo.png` colliding sees
+     * only the keys in the batch it is running. Two colliding keys three
+     * batches apart would both pass, and on a case-insensitive destination the
+     * second would silently overwrite the first while the migration reported
+     * success.
+     *
+     * With this column the check is one indexed lookup per key instead of a set
+     * carried across requests, and it stays correct however the batches fall.
+     *
+     * Nullable because rows written before this column existed have none — and
+     * a migration inventoried under the old code is re-inventoried rather than
+     * reinterpreted.
+     */
+    normalizedKey: text("normalizedKey"),
     /** `file`, or `directory` for an empty folder — an S3 zero-byte marker on
      *  one side and a real directory on the other. */
     kind: text("kind").notNull(),
@@ -282,6 +331,8 @@ export const storageMigrationEntries = sqliteTable(
      * same object twice. Uniqueness turns a retry into an upsert instead.
      */
     uniqueIndex("storage_migration_entry_job_key_idx").on(table.migrationId, table.key),
+    /** "Does anything already claim the path this key would take?" */
+    index("storage_migration_entry_job_normalized_idx").on(table.migrationId, table.normalizedKey),
   ],
 )
 

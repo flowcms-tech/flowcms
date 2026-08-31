@@ -50,6 +50,13 @@
       "when": 1788000000000,
       "tag": "0006_cutover_window",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1788100000000,
+      "tag": "0007_migration_orchestration",
+      "breakpoints": true
     }
   ]
 }

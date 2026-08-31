@@ -1,6 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm"
 import { db } from "@/db/client"
 import { storageMigrations } from "@/db/tables"
+import { triggerStorageRecovery } from "./storageRecoveryTrigger"
 
 /**
  * Blocking storage mutations during the final moments of a cutover.
@@ -114,6 +115,20 @@ export async function isStorageWriteLocked(): Promise<boolean> {
 export async function assertStorageWritable(): Promise<void> {
   const verdict = await checkStorageWriteVerdict()
   if (verdict === "writable") return
+
+  if (verdict === "locked") {
+    // THE ONE MOMENT A STALE LOCK IS DEMONSTRABLY DOING HARM. A cutover whose
+    // process died leaves this lock standing, and every upload in the
+    // application is refused until something clears it. Asking for a recovery
+    // pass here means the installation heals itself on the next attempted
+    // write, with no admin page open and nobody having noticed yet.
+    //
+    // Fire and forget: the refusal below is not waiting on it, and a live
+    // cutover — the common case — is left completely alone, because recovery
+    // releases nothing whose lease is still current.
+    triggerStorageRecovery()
+  }
+
   throw new StorageWriteLockedError(verdict)
 }
 
@@ -124,10 +139,23 @@ export async function assertStorageWritable(): Promise<void> {
  * proceed: the second matches no row and is told so. Returns whether the caller
  * now holds it.
  */
-export async function acquireCutoverLock(migrationId: string, fromStatus: string): Promise<boolean> {
-  const result = await db
+export async function acquireCutoverLock(
+  migrationId: string,
+  fromStatus: string,
+  store: { db: typeof db; migrations: typeof storageMigrations } = {
+    db,
+    migrations: storageMigrations,
+  },
+): Promise<boolean> {
+  const storageMigrations = store.migrations
+  const result = await store.db
     .update(storageMigrations)
-    .set({ status: "cutting_over", updatedAt: new Date() })
+    // The timestamp is stamped BY the lock, in the same statement. Taking the
+    // lock and recording when it was taken as two writes leaves a window in
+    // which a restart finds a locked job with no idea how long it has been
+    // locked — and "how long has this been going on" is the question that
+    // decides whether to abort back to the source.
+    .set({ status: "cutting_over", cutoverStartedAt: new Date(), updatedAt: new Date() })
     .where(and(eq(storageMigrations.id, migrationId), eq(storageMigrations.status, fromStatus)))
 
   // The adapter reports affected rows; anything other than exactly one means

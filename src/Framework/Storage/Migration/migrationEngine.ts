@@ -45,6 +45,8 @@ export const ENTRY_EXECUTION_STATES = [
   "source_changed",
   /** The source went away; the baseline entry is stale. */
   "source_deleted",
+  /** Settled by the final reconciliation. Nothing further applies. */
+  "reconciled",
 ] as const
 
 export type EntryExecutionState = (typeof ENTRY_EXECUTION_STATES)[number]
