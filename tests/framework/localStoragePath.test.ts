@@ -38,31 +38,33 @@ let root: string
 let outside: string
 
 beforeAll(() => {
-  workspace = mkdtempSync(join(tmpdir(), "flowcms-path-"))
+  // THE WHOLE WORKSPACE IS NORMALISED ONCE, so every path derived from it —
+  // the root, the outside directory, and the not-yet-created root a later test
+  // builds — is already in the namespace the resolver answers in.
+  //
+  // `createLocalPathResolver` resolves its root through `realpath` on purpose:
+  // a root reached VIA a symlink would otherwise make every operation under it
+  // look like an escape. The temporary directory is exactly such a root on two
+  // of the three platforms this suite runs on, and neither case is exotic:
+  //
+  //   macOS    `/var/folders/…` is a symlink to `/private/var/folders/…`
+  //   Windows  `os.tmpdir()` can hand back an 8.3 short name — the GitHub
+  //            runner gives `C:\Users\RUNNER~1\…` for `C:\Users\runneradmin\…`
+  //
+  // `.native` rather than plain `realpathSync`, and that distinction is the
+  // second half of the bug: Node's JavaScript implementation resolves symlinks
+  // but leaves an 8.3 short name short, while the libuv one expands it. The
+  // resolver uses `fs.promises.realpath`, which is the libuv path — so only
+  // `.native` asks the same question production does.
+  //
+  // Comparing against the raw path passed on Linux and on a developer machine
+  // whose TEMP is already a long real path, and failed on both CI runners.
+  workspace = realpathSync.native(mkdtempSync(join(tmpdir(), "flowcms-path-")))
   root = join(workspace, "storage")
   outside = join(workspace, "outside")
   mkdirSync(root, { recursive: true })
   mkdirSync(outside, { recursive: true })
   writeFileSync(join(outside, "secret.txt"), "do not read me")
-
-  // THE EXPECTATIONS BELOW MUST BE IN THE SAME NAMESPACE THE RESOLVER ANSWERS
-  // IN, and the resolver deliberately answers in real paths: it resolves its
-  // root through `realpath` so that a root reached VIA a symlink does not make
-  // every operation under it look like an escape.
-  //
-  // The temporary directory is exactly such a root on two of the three
-  // platforms this suite runs on, and neither is exotic:
-  //
-  //   macOS    `/var/folders/…` is a symlink to `/private/var/folders/…`
-  //   Windows  `os.tmpdir()` can hand back an 8.3 short name — the GitHub
-  //            runner returns `C:\Users\RUNNER~1\…` for `C:\Users\runneradmin\…`
-  //
-  // Comparing against the raw path passed silently on Linux and on a
-  // developer machine whose TEMP is already a long real path, and failed on
-  // both CI runners. Resolving here keeps the assertions about containment
-  // rather than about how the operating system spells a directory.
-  root = realpathSync(root)
-  outside = realpathSync(outside)
 })
 
 afterAll(() => {
