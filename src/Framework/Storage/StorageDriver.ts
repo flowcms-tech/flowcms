@@ -119,6 +119,26 @@ export interface StorageDriver {
    */
   openReadStream(key: string): Promise<AsyncIterable<Uint8Array>>
 
+  /**
+   * Writes an object FROM a stream, without buffering it.
+   *
+   * The write-side twin of `openReadStream`, and the reason a migration can
+   * move a 2 GB video: `uploadObject` takes a Buffer, so copying through it
+   * would hold the whole object in memory on both sides at once.
+   *
+   * Used only by migration. `uploadObject` stays the path for the File
+   * Manager, which has a 50 MB ceiling and already has its bytes in hand.
+   *
+   * `contentLength` is a HINT, not a contract: the source may have changed
+   * since it was measured. A backend that needs an exact length must derive it
+   * from the stream rather than trusting this.
+   */
+  writeObjectStream(
+    key: string,
+    body: AsyncIterable<Uint8Array>,
+    options?: { contentType?: string; contentLength?: number },
+  ): Promise<void>
+
   copyObject(oldKey: string, newKey: string): Promise<void>
   renameObject(oldKey: string, newKey: string): Promise<void>
   copyPrefix(oldPrefix: string, newPrefix: string): Promise<void>

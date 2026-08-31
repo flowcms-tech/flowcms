@@ -1,4 +1,6 @@
-import { createReadStream, promises as fs } from "node:fs"
+import { createReadStream, createWriteStream, promises as fs } from "node:fs"
+import { Readable } from "node:stream"
+import { pipeline } from "node:stream/promises"
 import path from "node:path"
 import { createLocalPathResolver, type LocalPathResolver } from "../localPath"
 import { StorageAccessError, StorageObjectNotFoundError } from "../StorageErrors"
@@ -232,6 +234,25 @@ export function createLocalStorageDriver(rootPath: string): StorageDriver {
         throw accessError("read", error)
       }
       return createReadStream(target)
+    },
+
+    async writeObjectStream(key, body) {
+      const target = await (await paths()).resolveFile(key)
+      await ensureParent(target)
+
+      // `pipeline` rather than piping by hand: it propagates an error from
+      // either end, destroys both streams, and does not resolve until the file
+      // handle is actually closed. Writing chunk by chunk and resolving on the
+      // last one would report success while bytes were still in the OS buffer.
+      try {
+        await pipeline(Readable.from(body), createWriteStream(target))
+      } catch (error) {
+        // A half-written file is worse than none: a later verification would
+        // read it, find a hash mismatch and call it a conflict. Removing it
+        // leaves the entry cleanly "not copied", which a retry handles.
+        await fs.rm(target, { force: true }).catch(() => {})
+        throw accessError("write", error)
+      }
     },
 
     async *scanEntries(options) {

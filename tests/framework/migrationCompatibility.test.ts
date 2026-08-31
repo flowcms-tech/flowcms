@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
+  caseSensitivityBlocker,
   createCompatibilityScanner,
   probeDestinationCaseSensitivity,
   type CompatibilityIssue,
@@ -23,14 +24,14 @@ import {
  * reported and the migration stops.
  */
 
-const sensitive = () => createCompatibilityScanner({ caseSensitive: true })
-const insensitive = () => createCompatibilityScanner({ caseSensitive: false })
+const sensitive = () => createCompatibilityScanner({ caseSensitivity: "sensitive" })
+const insensitive = () => createCompatibilityScanner({ caseSensitivity: "insensitive" })
 
 const file = (key: string) => ({ key, kind: "file" as const })
 const dir = (key: string) => ({ key, kind: "directory" as const })
 
 function issueFor(keys: { key: string; kind: "file" | "directory" }[], caseSensitive = true) {
-  const scanner = createCompatibilityScanner({ caseSensitive })
+  const scanner = createCompatibilityScanner({ caseSensitivity: caseSensitive ? "sensitive" : "insensitive" })
   let last: CompatibilityIssue | null = null
   for (const entry of keys) last = scanner.inspect(entry) ?? last
   return last
@@ -236,17 +237,18 @@ describe("probing the destination filesystem", () => {
   })
 
   it("answers for the real filesystem rather than guessing from the platform", async () => {
-    const result = await probeDestinationCaseSensitivity(workspace)
+    const result = (await probeDestinationCaseSensitivity(workspace)).sensitivity
 
     // The value depends on the host, so the assertion is about the SHAPE of the
     // answer. What matters is that it came from the filesystem: a Linux
     // container can mount a case-insensitive volume and macOS is
     // case-insensitive by default, so `process.platform` is a guess.
-    expect(typeof result).toBe("boolean")
+    expect(["sensitive", "insensitive"]).toContain(result)
   })
 
   it("agrees with what the filesystem actually does", async () => {
-    const sensitiveResult = await probeDestinationCaseSensitivity(workspace)
+    const sensitiveResult =
+      (await probeDestinationCaseSensitivity(workspace)).sensitivity === "sensitive"
 
     // Independent confirmation, by the same mechanism the probe uses.
     const { writeFileSync, statSync } = await import("node:fs")
@@ -271,30 +273,86 @@ describe("probing the destination filesystem", () => {
   it("creates the root if it does not exist yet", async () => {
     const fresh = join(workspace, "not-created")
 
-    await expect(probeDestinationCaseSensitivity(fresh)).resolves.toBeTypeOf("boolean")
+    expect(["sensitive", "insensitive"]).toContain(
+      (await probeDestinationCaseSensitivity(fresh)).sensitivity,
+    )
   })
 
-  it("assumes case-SENSITIVE when it cannot probe", async () => {
-    // The conservative direction: sensitivity means two keys differing only in
-    // case stay distinct, which is what S3 says they are. Assuming the opposite
-    // would invent collisions and block a valid migration.
+  it("reports UNKNOWN when it cannot probe, rather than assuming", async () => {
+    // CHANGED IN PHASE 4b1, and the Phase 4a fallback was unsafe.
+    //
+    // It returned "case-sensitive" on a failed probe, on the reasoning that
+    // sensitivity keeps two keys distinct. But the danger runs the other way:
+    // if the destination is really case-INSENSITIVE, treating it as sensitive
+    // lets `Photo.png` and `photo.png` both through, the second overwrites the
+    // first at the destination, and the migration reports success with one file
+    // gone.
     const { writeFileSync } = await import("node:fs")
     const occupied = join(workspace, "a-file")
     writeFileSync(occupied, "not a directory")
 
-    expect(await probeDestinationCaseSensitivity(join(occupied, "nested"))).toBe(true)
+    const probe = await probeDestinationCaseSensitivity(join(occupied, "nested"))
+    expect(probe.sensitivity).toBe("unknown")
+  })
+
+  it("explains an unknown result without leaking a path or an errno", async () => {
+    const { writeFileSync } = await import("node:fs")
+    const occupied = join(workspace, "another-file")
+    writeFileSync(occupied, "not a directory")
+
+    const probe = await probeDestinationCaseSensitivity(join(occupied, "nested"))
+
+    expect(probe.detail).toBeTruthy()
+    expect(probe.detail).not.toContain(workspace)
+    expect(probe.detail).not.toMatch(/ENOTDIR|ENOENT|EACCES/)
+  })
+
+  it.skipIf(process.platform === "win32")("reports unknown when the directory is unwritable", async () => {
+    const { mkdirSync, chmodSync } = await import("node:fs")
+    const readonly = join(workspace, "readonly-probe")
+    mkdirSync(readonly)
+    chmodSync(readonly, 0o500)
+
+    const probe = await probeDestinationCaseSensitivity(readonly)
+    chmodSync(readonly, 0o700)
+
+    expect(probe.sensitivity).toBe("unknown")
+    expect(probe.detail).toMatch(/permission/i)
+  })
+})
+
+describe("an unknown case behaviour blocks the migration", () => {
+  it("produces a blocking problem", () => {
+    const blocker = caseSensitivityBlocker({ sensitivity: "unknown", detail: "permission denied" })
+
+    expect(blocker).toBeTruthy()
+    expect(blocker).toMatch(/could not determine/i)
+    // And it says what the risk is, since "unknown" alone is not actionable.
+    expect(blocker).toMatch(/overwrite|silently/i)
+  })
+
+  it("does not block when the answer is known", () => {
+    expect(caseSensitivityBlocker({ sensitivity: "sensitive" })).toBeNull()
+    expect(caseSensitivityBlocker({ sensitivity: "insensitive" })).toBeNull()
+  })
+
+  it("is reported once for the destination, not once per key", () => {
+    // A fact about the destination, not about any particular key. Reporting it
+    // against half a million keys would bury it.
+    const blocker = caseSensitivityBlocker({ sensitivity: "unknown" })
+    expect(blocker).not.toContain("key")
   })
 })
 
 describe("simulated destinations", () => {
   it("treats a case-insensitive destination's keys as one", () => {
-    const scanner = createCompatibilityScanner({ caseSensitive: false })
+    const scanner = createCompatibilityScanner({ caseSensitivity: "insensitive" })
     expect(scanner.inspect(file("Logo.PNG"))).toBeNull()
     expect(scanner.inspect(file("logo.png"))?.reason).toBe("case_collision")
   })
 
   it("treats a case-sensitive destination's keys as distinct", () => {
-    const scanner = createCompatibilityScanner({ caseSensitive: true })
+    const scanner = createCompatibilityScanner({ caseSensitivity: "sensitive" })
     expect(scanner.inspect(file("Logo.PNG"))).toBeNull()
     expect(scanner.inspect(file("logo.png"))).toBeNull()
   })

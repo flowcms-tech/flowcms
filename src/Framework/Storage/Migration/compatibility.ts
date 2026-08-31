@@ -75,6 +75,51 @@ export interface ScannedEntry {
   kind: "file" | "directory"
 }
 
+/**
+ * What the destination filesystem does with case — including "we could not
+ * find out".
+ *
+ * A TRI-STATE, AND THAT IS THE POINT. Phase 4a returned a boolean and fell back
+ * to "case-sensitive" when the probe failed. That fallback is unsafe in exactly
+ * one direction, which is the direction that loses data: if the real
+ * destination is case-INSENSITIVE, treating it as sensitive lets `Photo.png`
+ * and `photo.png` both through as distinct keys, and the second silently
+ * overwrites the first at the destination. The migration reports success and
+ * one file is gone.
+ *
+ * There is no safe permissive default, so there is no default. An
+ * indeterminate probe is its own answer and it BLOCKS.
+ */
+export type DestinationCaseSensitivity = "sensitive" | "insensitive" | "unknown"
+
+/** A definite answer — the only thing a scanner may be built from. */
+export type KnownCaseSensitivity = Exclude<DestinationCaseSensitivity, "unknown">
+
+export interface CaseProbeResult {
+  sensitivity: DestinationCaseSensitivity
+  /** Operator-facing reason when the answer is `unknown`. Never a raw errno. */
+  detail?: string
+}
+
+/**
+ * The job-level gate: may a migration to this destination proceed at all?
+ *
+ * Returns a blocking problem, or null. Separate from `inspect()` because an
+ * unknown case behaviour is a fact about the DESTINATION, not about any
+ * particular key — reporting it once is right, and reporting it against every
+ * one of half a million keys would bury it.
+ */
+export function caseSensitivityBlocker(probe: CaseProbeResult): string | null {
+  if (probe.sensitivity !== "unknown") return null
+  return (
+    "FlowCMS could not determine whether the destination filesystem treats " +
+    "`Photo.png` and `photo.png` as the same file" +
+    (probe.detail ? ` (${probe.detail})` : "") +
+    ". Migrating without knowing could silently overwrite one file with another, so it will not " +
+    "start until this is resolved."
+  )
+}
+
 export interface CompatibilityScanner {
   /** Returns an issue, or null when the entry is representable. */
   inspect(entry: ScannedEntry): CompatibilityIssue | null
@@ -93,8 +138,14 @@ export interface CompatibilityScanner {
  * batched and the accumulated set is the only thing that has to persist.
  */
 export function createCompatibilityScanner(options: {
-  /** From the real destination probe, not from `process.platform`. */
-  caseSensitive: boolean
+  /**
+   * From the real destination probe, never from `process.platform`.
+   *
+   * Typed to EXCLUDE `unknown`, so a caller that has not resolved an
+   * indeterminate probe cannot construct a scanner at all — the gate is the
+   * type system rather than a runtime check somebody can forget.
+   */
+  caseSensitivity: KnownCaseSensitivity
 }): CompatibilityScanner {
   /** normalised path -> the original key that claimed it. */
   const claimed = new Map<string, string>()
@@ -103,7 +154,8 @@ export function createCompatibilityScanner(options: {
   /** Every key stored as a file. */
   const files = new Map<string, string>()
 
-  const normalise = (value: string) => (options.caseSensitive ? value : value.toLowerCase())
+  const caseSensitive = options.caseSensitivity === "sensitive"
+  const normalise = (value: string) => (caseSensitive ? value : value.toLowerCase())
 
   return {
     inspect(entry) {
@@ -196,8 +248,8 @@ export function createCompatibilityScanner(options: {
       if (previous !== undefined && previous !== key) {
         return {
           key,
-          reason: options.caseSensitive ? "path_collision" : "case_collision",
-          detail: options.caseSensitive
+          reason: caseSensitive ? "path_collision" : "case_collision",
+          detail: caseSensitive
             ? "Two different keys map to the same destination path."
             : "The destination filesystem is case-insensitive, so these two keys are one file there.",
           collidesWith: previous,
@@ -242,32 +294,54 @@ export function createCompatibilityScanner(options: {
  * removes it. Both names are dot-prefixed and carry a UUID so a concurrent
  * probe cannot collide with this one.
  *
- * Falls back to `true` (case-SENSITIVE) if the probe cannot run. That is the
- * conservative direction: assuming sensitivity means two keys differing only in
- * case are treated as distinct, which is what S3 says they are. Assuming the
- * opposite would report collisions that are not real and block a valid
- * migration.
+ * AN INDETERMINATE PROBE RETURNS `unknown` AND BLOCKS. Phase 4a fell back to
+ * "case-sensitive" here, which is unsafe in precisely the direction that loses
+ * data: if the destination is really case-INSENSITIVE, treating it as sensitive
+ * lets `Photo.png` and `photo.png` through as two keys, and the second
+ * overwrites the first at the destination while the migration reports success.
+ *
+ * There is no safe permissive default, so this returns no default at all.
  */
-export async function probeDestinationCaseSensitivity(root: string): Promise<boolean> {
+export async function probeDestinationCaseSensitivity(root: string): Promise<CaseProbeResult> {
   const id = randomUUID()
   const lower = join(root, `.flowcms-case-probe-${id}`)
   const upper = join(root, `.FLOWCMS-CASE-PROBE-${id.toUpperCase()}`)
 
   try {
     await fs.mkdir(root, { recursive: true })
+  } catch (error) {
+    return { sensitivity: "unknown", detail: describeProbeFailure(error, "the directory could not be created") }
+  }
+
+  try {
     await fs.writeFile(lower, "probe")
-    try {
-      // If the filesystem is case-insensitive this resolves to the file just
-      // written; if sensitive it does not exist.
-      await fs.stat(upper)
-      return false
-    } catch {
-      return true
-    }
-  } catch {
-    return true
+  } catch (error) {
+    return { sensitivity: "unknown", detail: describeProbeFailure(error, "a test file could not be written") }
+  }
+
+  try {
+    // If the filesystem is case-insensitive this resolves to the file just
+    // written; if sensitive it does not exist.
+    await fs.stat(upper)
+    return { sensitivity: "insensitive" }
+  } catch (error) {
+    const code = (error as { code?: string })?.code
+    // ENOENT is the ANSWER — the other case genuinely does not exist, so the
+    // filesystem is case-sensitive. Any other error means the question was not
+    // answered, which is not the same thing and must not be read as one.
+    if (code === "ENOENT") return { sensitivity: "sensitive" }
+    return { sensitivity: "unknown", detail: describeProbeFailure(error, "the test file could not be read back") }
   } finally {
     await fs.rm(lower, { force: true }).catch(() => {})
     await fs.rm(upper, { force: true }).catch(() => {})
   }
+}
+
+/** Operator-facing, never a raw errno or a path. */
+function describeProbeFailure(error: unknown, what: string): string {
+  const code = (error as { code?: string })?.code
+  if (code === "EACCES" || code === "EPERM") return `${what} — permission denied`
+  if (code === "EROFS") return `${what} — the destination is read-only`
+  if (code === "ENOSPC") return `${what} — the destination is full`
+  return what
 }

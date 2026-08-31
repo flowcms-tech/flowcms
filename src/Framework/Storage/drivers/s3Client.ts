@@ -41,6 +41,33 @@ export async function getS3Connection(): Promise<S3Connection> {
       // provider, and assumed by `backfillContentImageUrls.ts` when it derives
       // an object key from a presigned URL's first path segment.
       forcePathStyle: true,
+      /**
+       * DO NOT let the SDK add or validate its own checksums opportunistically.
+       *
+       * Recent AWS SDK v3 versions default both of these to `WHEN_SUPPORTED`,
+       * which attaches a CRC32 to uploads and validates one on downloads. On
+       * AWS that is fine. On an S3-COMPATIBLE server it is not: a multipart
+       * upload's `x-amz-checksum-crc32` is a checksum OF THE PART CHECKSUMS, not
+       * of the whole object, and implementations differ on how they compute and
+       * return it. Garage returns a value the SDK then rejects, so a
+       * multipart-uploaded object could be written successfully and became
+       * unreadable —
+       *
+       *   Checksum mismatch: expected "SoXlrg==" but received "tM+uwg=="
+       *
+       * — which is exactly what a migration hit when it read an object back to
+       * verify it. Found against a real Garage instance; no unit test with a
+       * mocked SDK could have.
+       *
+       * Turning this off loses nothing FlowCMS relies on. Integrity of a
+       * migrated object is established by reading it back and comparing
+       * SHA-256 over the actual bytes, which is stronger than a CRC32 the
+       * server computes about itself, and `WHEN_REQUIRED` still supplies
+       * checksums for the operations that genuinely mandate them.
+       */
+      requestChecksumCalculation: "WHEN_REQUIRED",
+      responseChecksumValidation: "WHEN_REQUIRED",
+
     }),
     bucket: config.bucket,
   }

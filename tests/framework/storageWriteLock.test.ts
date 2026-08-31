@@ -61,6 +61,9 @@ function fakeDriver(): StorageDriver {
     // Bounded-memory read seam. Not exercised by this file; present because
     // the contract requires it.
     openReadStream: async () => (async function* () {})(),
+    // Streaming write seam. Not exercised by this file; present because the
+    // contract requires it.
+    writeObjectStream: async () => {},
   }
 }
 

@@ -6,6 +6,8 @@ import {
   DeleteObjectsCommand,
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3"
+import { Upload } from "@aws-sdk/lib-storage"
+import { Readable } from "node:stream"
 import { getS3Connection as activeS3Connection, type S3Connection } from "./s3Client"
 import { StorageObjectNotFoundError } from "../StorageErrors"
 import type { DirectoryListing, StorageDriver, StorageObjectSummary } from "../StorageDriver"
@@ -251,6 +253,45 @@ export function createS3StorageDriver(connect: () => Promise<S3Connection>): Sto
 
   async deletePrefix(prefix) {
     await deleteAllUnderPrefix(await getS3Connection(), prefix)
+  },
+
+  async writeObjectStream(key, body, options) {
+    const { client, bucket } = await getS3Connection()
+
+    /**
+     * THE AWS SDK'S OWN MANAGED UPLOAD, not a hand-rolled multipart.
+     *
+     * `PutObjectCommand` cannot take a stream of unknown length — the SDK needs
+     * `ContentLength` to sign the request — and a migration's length is only ever
+     * a hint, because the source can change between being measured and being
+     * read. `Upload` solves that properly: it buffers one part at a time, starts
+     * a multipart upload only when the object turns out to exceed the part size,
+     * and ABORTS the multipart on failure so a half-uploaded object does not sit
+     * in the bucket accruing storage charges invisibly.
+     *
+     * Writing that by hand means CreateMultipartUpload, part numbering, ETag
+     * collection, CompleteMultipartUpload and an abort path that must survive
+     * the error that triggered it. It is exactly the kind of thing to take from
+     * the vendor rather than reimplement — hence `@aws-sdk/lib-storage`, added
+     * as a direct dependency for this.
+     */
+    const upload = new Upload({
+      client,
+      params: {
+        Bucket: bucket,
+        Key: key,
+        Body: Readable.from(body),
+        ContentType: options?.contentType,
+      },
+      // 8 MB parts: comfortably above S3's 5 MB minimum, and small enough that
+      // peak memory stays modest even with several parts in flight.
+      partSize: 8 * 1024 * 1024,
+      queueSize: 2,
+      // A failed upload must not leave parts behind.
+      leavePartsOnError: false,
+    })
+
+    await upload.done()
   },
 
   async openReadStream(key) {
