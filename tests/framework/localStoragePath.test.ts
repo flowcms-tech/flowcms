@@ -1,4 +1,11 @@
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync, rmSync } from "node:fs"
+import {
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join, sep } from "node:path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
@@ -37,6 +44,25 @@ beforeAll(() => {
   mkdirSync(root, { recursive: true })
   mkdirSync(outside, { recursive: true })
   writeFileSync(join(outside, "secret.txt"), "do not read me")
+
+  // THE EXPECTATIONS BELOW MUST BE IN THE SAME NAMESPACE THE RESOLVER ANSWERS
+  // IN, and the resolver deliberately answers in real paths: it resolves its
+  // root through `realpath` so that a root reached VIA a symlink does not make
+  // every operation under it look like an escape.
+  //
+  // The temporary directory is exactly such a root on two of the three
+  // platforms this suite runs on, and neither is exotic:
+  //
+  //   macOS    `/var/folders/…` is a symlink to `/private/var/folders/…`
+  //   Windows  `os.tmpdir()` can hand back an 8.3 short name — the GitHub
+  //            runner returns `C:\Users\RUNNER~1\…` for `C:\Users\runneradmin\…`
+  //
+  // Comparing against the raw path passed silently on Linux and on a
+  // developer machine whose TEMP is already a long real path, and failed on
+  // both CI runners. Resolving here keeps the assertions about containment
+  // rather than about how the operating system spells a directory.
+  root = realpathSync(root)
+  outside = realpathSync(outside)
 })
 
 afterAll(() => {
