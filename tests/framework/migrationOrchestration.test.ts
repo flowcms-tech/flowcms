@@ -825,3 +825,149 @@ describe("the report the operator reads", () => {
     expect(page.entries[0].detail).toMatch(/reserved device name/i)
   })
 })
+
+describe("one migration after another", () => {
+  /**
+   * An installation relocates more than once in its life, and the second move
+   * is usually the reverse of the first. That has to be an ordinary migration:
+   * there is no rollback, because after a cutover uploads land at the new
+   * location and flipping back would lose them.
+   */
+
+  it("lets a completed migration be followed by another, in the other direction", async () => {
+    await source().uploadObject("2026/08/photo.jpg", bytes("original"))
+
+    // 1. source -> destination
+    const first = await runToReady()
+    expect((await service.cutover(first)).outcome).toBe("completed")
+    expect(await settingsRow().then((r) => r?.activeStorageRoot)).toBe(destinationRoot)
+
+    // 2. and back again, treated as a new migration rather than an undo.
+    //    The deployment now offers the ORIGINAL root as its local candidate,
+    //    which is what an operator would have set to move back.
+    service = buildService({ LOCAL_STORAGE_PATH: sourceRoot } as unknown as NodeJS.ProcessEnv)
+
+    const second = await runToReady()
+    expect(second).not.toBe(first)
+    expect((await service.cutover(second)).outcome).toBe("completed")
+    expect(await settingsRow().then((r) => r?.activeStorageRoot)).toBe(sourceRoot)
+
+    // The file is at both, with its key untouched, and nothing was deleted.
+    expect((await source().downloadObject("2026/08/photo.jpg")).toString()).toBe("original")
+    expect((await destination().downloadObject("2026/08/photo.jpg")).toString()).toBe("original")
+  })
+
+  it("takes the CURRENT active location as the second migration's source", async () => {
+    // Not the original one. After the first cutover the destination is where
+    // the files are, and a second migration that read the old source would be
+    // copying from a store the site no longer uses.
+    await source().uploadObject("a.txt", bytes("a"))
+    const first = await runToReady()
+    await service.cutover(first)
+
+    service = buildService({ LOCAL_STORAGE_PATH: sourceRoot } as unknown as NodeJS.ProcessEnv)
+    const job = await service.create({ mode: "copy", destination: { driver: "local" } })
+
+    expect(job.source.root).toBe(destinationRoot)
+    expect(job.destination.root).toBe(sourceRoot)
+  })
+
+  it("still refuses a destination equal to the CURRENT active location", async () => {
+    await source().uploadObject("a.txt", bytes("a"))
+    const first = await runToReady()
+    await service.cutover(first)
+
+    // The deployment still names the location the site just moved TO.
+    const sameAsActive = buildService({
+      LOCAL_STORAGE_PATH: destinationRoot,
+    } as unknown as NodeJS.ProcessEnv)
+
+    await expect(
+      sameAsActive.create({ mode: "copy", destination: { driver: "local" } }),
+    ).rejects.toMatchObject({ status: 422 })
+  })
+
+  it("keeps BOTH migrations readable afterwards", async () => {
+    await source().uploadObject("a.txt", bytes("a"))
+    const first = await runToReady()
+    await service.cutover(first)
+
+    service = buildService({ LOCAL_STORAGE_PATH: sourceRoot } as unknown as NodeJS.ProcessEnv)
+    const second = await runToReady()
+    await service.cutover(second)
+
+    const history = await service.history()
+    expect(history.map((job) => job.id)).toEqual(expect.arrayContaining([first, second]))
+    expect(history.every((job) => job.status === "completed")).toBe(true)
+  })
+})
+
+describe("a completed migration stays readable, and stays finished", () => {
+  it("can be read on its own long after it finished", async () => {
+    await source().uploadObject("a.txt", bytes("a"))
+    await destination().uploadObject("extra.txt", bytes("theirs"))
+    const id = await runToReady()
+    await service.acknowledgeExtras(id, (await service.describeActiveJob())!.version)
+    await service.cutover(id)
+
+    const job = await service.describeJob(id)
+
+    expect(job.status).toBe("completed")
+    expect(job.mode).toBe("copy")
+    expect(job.source.root).toBe(sourceRoot)
+    expect(job.destination.root).toBe(destinationRoot)
+    expect(job.cutoverAt).not.toBeNull()
+    expect(job.extras.count).toBe(1)
+    expect(job.counts.byClassification.destination_only).toBe(1)
+  })
+
+  it("keeps its per-key report", async () => {
+    await source().uploadObject("keep-me.txt", bytes("a"))
+    const id = await runToReady()
+    await service.cutover(id)
+
+    const page = await service.entries(id, {}, { limit: 25, offset: 0 })
+
+    expect(page.total).toBeGreaterThan(0)
+    expect(page.entries.map((e) => e.key)).toContain("keep-me.txt")
+  })
+
+  it("carries no credential into the historical record", async () => {
+    await source().uploadObject("a.txt", bytes("a"))
+    const id = await runToReady()
+    await service.cutover(id)
+
+    const serialised = JSON.stringify(await service.describeJob(id))
+
+    expect(serialised).not.toContain(sourceRoot === "" ? " " : "secretAccessKey")
+    expect(serialised).not.toMatch(/AKIA/)
+  })
+
+  it("REFUSES every mutation once it is finished", async () => {
+    await source().uploadObject("a.txt", bytes("a"))
+    const id = await runToReady()
+    const version = (await service.describeActiveJob())!.version
+    await service.cutover(id)
+
+    for (const attempt of [
+      () => service.runInventoryBatch(id),
+      () => service.runTransferBatch(id),
+      () => service.testDestination(id),
+      () => service.retryFailed(id),
+      () => service.acknowledgeExtras(id, version),
+      () => service.cancel(id, version),
+    ]) {
+      await expect(attempt()).rejects.toMatchObject({ status: 409 })
+    }
+
+    // A cutover of a finished job is refused at the same gate, not attempted
+    // and then declined — there is nothing left that could be cut over.
+    await expect(service.cutover(id)).rejects.toMatchObject({ status: 409 })
+  })
+
+  it("404s an id that names nothing", async () => {
+    await expect(
+      service.describeJob("11111111-2222-4333-8444-555555555555"),
+    ).rejects.toMatchObject({ status: 404 })
+  })
+})

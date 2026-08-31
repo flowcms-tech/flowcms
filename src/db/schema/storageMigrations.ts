@@ -145,19 +145,22 @@ export const storageMigrations = sqliteTable("storage_migration", {
   failureReason: text("failureReason"),
 
   /**
-   * When the CURRENT inventory pass started.
+   * WHICH INVENTORY PASS IS CURRENT.
    *
-   * The boundary that separates "seen by this scan" from "left over from the
-   * last one". Inventory is re-runnable — an operator resolves a conflict at
-   * the destination and asks for another pass — and a re-run must not leave
-   * behind rows for keys that have since been deleted from the source: they
-   * would sit there as unprocessed work and block readiness forever.
+   * A COUNTER, NOT A TIMESTAMP, and Phase 5 replaced a timestamp with it. The
+   * question is set membership — "did the scan that is running now see this
+   * entry?" — and answering it by comparing an entry`s `updatedAt` against a
+   * pass start time makes correctness depend on the wall clocks of every node
+   * that writes. Two replicas a second apart, or one NTP correction mid-scan,
+   * and a row that WAS seen looks stale: its destination copy gets reconciled
+   * away, or a deleted key keeps a row that blocks readiness forever.
    *
-   * Comparing each entry`s updatedAt against this timestamp is what makes
-   * "this scan did not see it" answerable at the end of the pass. `updatedAt` on
-   * the job cannot do it: every batch moves it.
+   * A generation has no such failure mode. The database hands out the number,
+   * every observation is stamped with it, and "not stamped N" is a fact rather
+   * than an inference. It is also idempotent under retries: re-recording the
+   * same key in the same pass writes the same stamp.
    */
-  inventoryStartedAt: integer("inventoryStartedAt", { mode: "timestamp_ms" }),
+  inventoryGeneration: integer("inventoryGeneration").notNull().default(0),
 
   /** When the baseline pass finished — the boundary the final delta is against. */
   baselineCompletedAt: integer("baselineCompletedAt", { mode: "timestamp_ms" }),
@@ -231,6 +234,21 @@ export const storageMigrationEntries = sqliteTable(
      * reinterpreted.
      */
     normalizedKey: text("normalizedKey"),
+
+    /**
+     * The inventory pass that last observed this entry.
+     *
+     * The durable half of "did the current scan see this?". Inventory is
+     * re-runnable and runs in batches, so a re-run must be able to tell a row
+     * it has just re-recorded from one left over from the previous pass — a key
+     * deleted from the source between the two would otherwise keep its row, sit
+     * there as unprocessed work, and block readiness forever.
+     *
+     * Null for rows written before this column existed, which read as "not seen
+     * by the current pass" — correct, because the current pass will re-record
+     * anything that is still there.
+     */
+    seenInGeneration: integer("seenInGeneration"),
     /** `file`, or `directory` for an empty folder — an S3 zero-byte marker on
      *  one side and a real directory on the other. */
     kind: text("kind").notNull(),
@@ -331,7 +349,15 @@ export const storageMigrationEntries = sqliteTable(
      * same object twice. Uniqueness turns a retry into an upsert instead.
      */
     uniqueIndex("storage_migration_entry_job_key_idx").on(table.migrationId, table.key),
-    /** "Does anything already claim the path this key would take?" */
+    /**
+     * "Does anything already claim the path this key would take?"
+     *
+     * Serves two questions, and the second is the reason it is a RANGE index
+     * rather than a hash: an exact match answers "is this the same path", and
+     * an ordered prefix scan answers "is anything stored UNDER this path" —
+     * which is how a file at `foo` is caught colliding with `foo/bar.jpg` even
+     * when the two are enumerated in different batches.
+     */
     index("storage_migration_entry_job_normalized_idx").on(table.migrationId, table.normalizedKey),
   ],
 )

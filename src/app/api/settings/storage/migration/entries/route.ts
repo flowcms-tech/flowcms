@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import {
-  entriesQuerySchema,
   guardMigrationRequest,
   migrationErrorResponse,
 } from "@/Framework/Storage/Migration/migrationApi"
-
+import {
+  entriesQuerySchema,
+} from "@/Framework/Storage/Migration/migrationRequests"
 /**
  * The detailed report: which keys, and what is wrong with them.
  *
@@ -26,7 +27,7 @@ export async function GET(request: NextRequest) {
   const parsed = entriesQuerySchema.safeParse(Object.fromEntries(url.searchParams))
   if (!parsed.success) {
     return NextResponse.json(
-      { message: parsed.error.issues.map((issue) => issue.message) },
+      { message: parsed.error.issues.map((issue: { message: string }) => issue.message) },
       { status: 422 },
     )
   }

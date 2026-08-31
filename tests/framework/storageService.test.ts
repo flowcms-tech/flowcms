@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync, statSync } from "node:fs"
+import { join } from "node:path"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { StorageObjectNotFoundError } from "@/Framework/Storage/StorageErrors"
 import {
@@ -58,11 +60,6 @@ vi.mock("@/Framework/Storage/storageWriteLock", () => ({
   assertStorageWritable: async () => {},
 }))
 
-const getSignedUrl = vi.fn()
-vi.mock("@aws-sdk/s3-request-presigner", () => ({
-  getSignedUrl: (...args: unknown[]) => getSignedUrl(...args),
-}))
-
 const getS3Config = vi.fn()
 vi.mock("@/Framework/Settings/SettingsService", () => ({
   getS3Config: () => getS3Config(),
@@ -89,7 +86,6 @@ function inputOf(index: number): Record<string, unknown> {
 
 beforeEach(() => {
   send.mockReset()
-  getSignedUrl.mockReset()
   getS3Config.mockReset()
   clientConstructorArgs.length = 0
 
@@ -641,10 +637,33 @@ describe("presigning is gone", () => {
     expect("getPresignedDownloadUrl" in driver).toBe(false)
   })
 
-  it("means the presigner package is never invoked", async () => {
-    await StorageService.downloadObject("posts/a.png").catch(() => {})
-    await StorageService.listDirectory("posts/")
+  it("means the presigner package is not even a dependency", () => {
+    // STRONGER THAN THE MOCK THIS REPLACED. Phase 1 asserted that
+    // `getSignedUrl` was never called, which needed the package installed in
+    // order to mock it. Phase 5 removed the dependency, so the guarantee is now
+    // that it cannot be called: there is nothing to call.
+    const manifest = JSON.parse(readFileSync("package.json", "utf8"))
 
-    expect(getSignedUrl).not.toHaveBeenCalled()
+    expect(manifest.dependencies).not.toHaveProperty("@aws-sdk/s3-request-presigner")
+    expect(manifest.devDependencies ?? {}).not.toHaveProperty("@aws-sdk/s3-request-presigner")
+  })
+
+  it("is not imported anywhere in the application", () => {
+    const offenders = sourceFiles().filter((file) =>
+      readFileSync(file, "utf8").includes("s3-request-presigner"),
+    )
+
+    expect(offenders).toEqual([])
   })
 })
+
+/** Every application source file, for the import assertions above. */
+function sourceFiles(root = "src"): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(root)) {
+    const full = join(root, entry)
+    if (statSync(full).isDirectory()) out.push(...sourceFiles(full))
+    else if (/.(ts|tsx)$/.test(full)) out.push(full)
+  }
+  return out
+}

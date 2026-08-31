@@ -144,6 +144,7 @@ export async function advanceInventory(
       await repository.recordEntry(job.id, {
         key: entry.key,
         normalizedKey: normalize(entry.key),
+        seenInGeneration: job.inventoryGeneration,
         kind: entry.kind,
         classification: classified.classification,
         state: "pending",
@@ -202,7 +203,7 @@ export async function advanceInventory(
       // Inventory is re-runnable, and without this a key deleted from the
       // source between two passes would keep its row, stay unprocessed, and
       // block readiness forever.
-      await repository.resolveUnseenEntries(job.id, job.inventoryStartedAt ?? new Date(0))
+      await repository.resolveUnseenEntries(job.id, job.inventoryGeneration)
     }
 
     return {
@@ -243,6 +244,7 @@ async function recordSourceEntry(
     await repository.recordEntry(job.id, {
       key: entry.key,
       normalizedKey,
+      seenInGeneration: job.inventoryGeneration,
       kind: entry.kind,
       classification: "incompatible",
       state: "pending",
@@ -273,6 +275,7 @@ async function recordSourceEntry(
     await repository.recordEntry(job.id, {
       key: entry.key,
       normalizedKey,
+      seenInGeneration: job.inventoryGeneration,
       kind: entry.kind,
       classification: "incompatible",
       state: "pending",
@@ -288,6 +291,47 @@ async function recordSourceEntry(
     return
   }
 
+  // 2b. WOULD THIS KEY NEED A FOLDER WHERE ANOTHER KEY IS A FILE, OR VICE VERSA?
+  //
+  //     A filesystem cannot hold a file at `2026` and a file at `2026/x.jpg`
+  //     at the same time — one of the two needs `2026` to be a directory. On
+  //     S3 both are ordinary keys and coexist happily, which is exactly how a
+  //     source ends up containing them.
+  //
+  //     BEFORE PHASE 5 THIS SURVIVED INVENTORY. The in-memory scanner sees one
+  //     batch, so a pair enumerated in different batches passed analysis and
+  //     failed later, mid-transfer, as `ENOTDIR` or `EISDIR`. Never silent
+  //     data loss — but the wrong layer, and an operator got a filesystem
+  //     errno instead of the two keys that cannot coexist.
+  //
+  //     Both directions are needed because either key may be enumerated first,
+  //     and both are answered from the durable `normalizedKey` index.
+  if (job.destinationDriver === "local") {
+    const pathCollision = await findPathCollision(job.id, repository, normalizedKey, entry.kind)
+    if (pathCollision) {
+      await repository.recordEntry(job.id, {
+        key: entry.key,
+        normalizedKey,
+        seenInGeneration: job.inventoryGeneration,
+        kind: entry.kind,
+        classification: "incompatible",
+        state: "pending",
+        sourceSize: entry.size,
+        sourceLastModified: entry.lastModified ?? null,
+        detail: pathCollisionDetail(entry.key, pathCollision.key, pathCollision.direction),
+      })
+      await repository.markEntry(job.id, pathCollision.key, {
+        classification: "incompatible",
+        detail: pathCollisionDetail(
+          pathCollision.key,
+          entry.key,
+          pathCollision.direction === "ancestor_is_file" ? "descendant_exists" : "ancestor_is_file",
+        ),
+      })
+      return
+    }
+  }
+
   // 3. WHAT IS THE DIFFERENCE BETWEEN THE TWO SIDES?
   //
   //    "The destination has this key" is read from the row the destination scan
@@ -297,7 +341,7 @@ async function recordSourceEntry(
   const seenAtDestination =
     existing !== null &&
     existing.classification === "destination_only" &&
-    (!job.inventoryStartedAt || existing.updatedAt >= job.inventoryStartedAt)
+    existing.seenInGeneration === job.inventoryGeneration
 
   const classified = await classifySourceEntry(entry, {
     source,
@@ -308,6 +352,7 @@ async function recordSourceEntry(
   await repository.recordEntry(job.id, {
     key: entry.key,
     normalizedKey,
+    seenInGeneration: job.inventoryGeneration,
     kind: entry.kind,
     classification: classified.classification,
     // ALWAYS `pending`. What a classification means for the work is the
@@ -321,4 +366,80 @@ async function recordSourceEntry(
     destinationHash: classified.destinationHash ?? null,
     detail: classified.detail ?? null,
   })
+}
+
+type PathCollisionDirection = "ancestor_is_file" | "descendant_exists"
+
+/**
+ * A key already recorded that cannot share a filesystem with this one.
+ *
+ * Two questions, both answered from the persisted `normalizedKey` index so the
+ * answer does not depend on which batch either key landed in:
+ *
+ *   ANCESTOR IS A FILE   this key needs a folder at some prefix of its path,
+ *                        and a file is already recorded there.
+ *
+ *   DESCENDANT EXISTS    this key is a file, and something is already recorded
+ *                        beneath it — so it needs to be a folder.
+ *
+ * A DIRECTORY ENTRY IS EXEMPT FROM THE SECOND CHECK. Directory entries exist
+ * only for EMPTY folders, and "empty folder with things under it" is not a
+ * collision — it is the same folder, described twice across a re-scan.
+ */
+async function findPathCollision(
+  migrationId: string,
+  repository: MigrationRepository,
+  normalizedKey: string,
+  kind: "file" | "directory",
+): Promise<{ key: string; direction: PathCollisionDirection } | null> {
+  for (const ancestor of ancestorPaths(normalizedKey)) {
+    const blocking = await repository.findFileAtNormalizedPath(migrationId, ancestor)
+    if (blocking) return { key: blocking.key, direction: "ancestor_is_file" }
+  }
+
+  if (kind === "file") {
+    const beneath = await repository.findEntryUnderNormalizedPrefix(migrationId, normalizedKey)
+    if (beneath) return { key: beneath.key, direction: "descendant_exists" }
+  }
+
+  return null
+}
+
+/**
+ * Every directory path this key implies, deepest first.
+ *
+ * `2026/08/x.jpg` implies `2026/08` and `2026`. The key itself is excluded:
+ * an entry does not collide with itself, and an exact-path clash between two
+ * DIFFERENT keys is the separate check above.
+ */
+function ancestorPaths(normalizedKey: string): string[] {
+  const parts = normalizedKey.split("/").filter(Boolean)
+  const out: string[] = []
+  for (let i = parts.length - 1; i > 0; i -= 1) out.push(parts.slice(0, i).join("/"))
+  return out
+}
+
+/**
+ * Names it as a PATH collision, not a filesystem error.
+ *
+ * The operator has to act on this, and "ENOTDIR" tells them nothing they can
+ * act on. Both keys are always named: one told "these two cannot coexist" can
+ * decide which to move, and one told "this key has a problem" cannot.
+ */
+function pathCollisionDetail(
+  key: string,
+  other: string,
+  direction: PathCollisionDirection,
+): string {
+  const explanation =
+    direction === "ancestor_is_file"
+      ? `"${other}" is stored as a file at a path this key needs to be a folder`
+      : `this key is a file, and "${other}" is stored underneath it, which needs it to be a folder`
+
+  return (
+    `File and folder path collision: ${explanation}. A filesystem cannot hold both, although an ` +
+    `object store can. FlowCMS will not rename either key — they are referenced by published ` +
+    `content, and rewriting one would break every link to it. Move or remove one of the two at ` +
+    `the source, then re-run the analysis.`
+  )
 }

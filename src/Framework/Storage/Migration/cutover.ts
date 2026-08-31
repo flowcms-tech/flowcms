@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm"
 import { db } from "@/db/client"
+import { affectedRowCount } from "@/db/writes"
 import { settings, storageMigrations } from "@/db/tables"
 import { SETTINGS_SINGLETON_ID } from "@/db/schema/settings"
 import { invalidateSettingsCache } from "@/Framework/Settings/SettingsService"
@@ -183,8 +184,7 @@ export async function commitCutover(
         ),
       )
 
-    const affected = result as unknown as { rowsAffected?: number; rowCount?: number }
-    if ((affected.rowsAffected ?? affected.rowCount ?? 0) !== 1) {
+    if (affectedRowCount(result) !== 1) {
       // Rolls back the settings update with it. The whole point of one
       // transaction: an installation cannot be repointed by a cutover whose job
       // record did not also complete.

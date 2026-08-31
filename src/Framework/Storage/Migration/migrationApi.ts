@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { z } from "zod"
+import type { z } from "zod"
 import { requireApiAuth } from "@/Framework/Auth/apiAuth"
 import { canManageSettings, resolveRole } from "@/Framework/Auth/permissions"
 import { isSameOriginRequest } from "@/Framework/Setup/sameOrigin"
@@ -85,95 +85,27 @@ export function migrationErrorResponse(error: unknown): NextResponse {
   )
 }
 
-// ---------------------------------------------------------------------------
-// Request bodies
-// ---------------------------------------------------------------------------
-
 /**
- * The destination a create request may name.
+ * An unrecognised field is REFUSED, and says why.
  *
- * NOTE WHAT IS NOT HERE: a local root. A Local destination is deployment
- * configuration read from `LOCAL_STORAGE_PATH`, and a request that carried a
- * path would make an admin session a file-write primitive anywhere the process
- * can reach. `buildDestinationConfig` discards the field even if one is sent;
- * the schema simply never accepts it in the first place.
+ * Zod’s own text names the key and stops there. On this API the key that
+ * matters is a filesystem path on a local destination, and "unrecognized key:
+ * root" does not tell the operator that the path is deployment configuration
+ * rather than something they may choose. Every other unrecognised field gets
+ * the same treatment for consistency: silently dropping input a client believed
+ * it was sending is how a request appears to succeed at something it did not do.
  */
-export const createMigrationSchema = z.object({
-  mode: z.enum(["copy", "verify"], {
-    message:
-      'Choose "copy" for FlowCMS to migrate the files, or "verify" if you have already migrated ' +
-      "them yourself.",
-  }),
-  destination: z.object({
-    driver: z.enum(["s3", "local"]),
-    endpoint: z.string().trim().max(2048).optional(),
-    region: z.string().trim().max(255).optional(),
-    bucket: z.string().trim().max(255).optional(),
-    accessKeyId: z.string().trim().max(512).optional(),
-    secretAccessKey: z.string().max(2048).optional(),
-  }),
-})
+function describeIssue(issue: { code: string; message: string; keys?: string[] }): string {
+  if (issue.code !== "unrecognized_keys") return issue.message
 
-export const acknowledgeSchema = z.object({
-  acknowledgeExtras: z.literal(true),
-  migrationId: z.string().uuid(),
-  version: z.number().int().min(0),
-})
-
-export const cancelSchema = z.object({
-  migrationId: z.string().uuid(),
-  version: z.number().int().min(0),
-  reason: z.string().trim().max(500).optional(),
-})
-
-export const batchSchema = z.object({
-  migrationId: z.string().uuid(),
-  /** Capped again in the service; a client cannot ask for unbounded work. */
-  batchSize: z.number().int().min(1).max(500).optional(),
-  concurrency: z.number().int().min(1).max(8).optional(),
-})
-
-export const advanceSchema = batchSchema.extend({
-  action: z.enum(["transfer", "retry"]).default("transfer"),
-})
-
-export const cutoverSchema = z.object({
-  migrationId: z.string().uuid(),
-  version: z.number().int().min(0),
-  /**
-   * The deliberate final confirmation.
-   *
-   * A separate required field rather than "you called the endpoint, so you must
-   * have meant it". This is the request that makes the destination
-   * authoritative and cannot be undone, and a retried or replayed POST that
-   * happened to reach it should not be one keystroke away from doing so.
-   */
-  confirm: z.literal(true, {
-    message: "The cutover has to be confirmed explicitly.",
-  }),
-})
-
-export const entriesQuerySchema = z.object({
-  migrationId: z.string().uuid(),
-  classification: z
-    .enum(["missing", "matching", "conflicting", "destination_only", "incompatible"])
-    .optional(),
-  state: z
-    .enum([
-      "pending",
-      "copying",
-      "copied",
-      "verified",
-      "blocked",
-      "failed",
-      "source_changed",
-      "source_deleted",
-      "reconciled",
-    ])
-    .optional(),
-  limit: z.coerce.number().int().min(1).max(200).default(50),
-  offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
-})
+  const keys = (issue.keys ?? []).join(", ")
+  return (
+    `This request contained field(s) that are not accepted here: ${keys}. In particular, a local ` +
+    `destination’s path is set by the deployment’s LOCAL_STORAGE_PATH and cannot be chosen from ` +
+    `the browser — a path that points outside the persistent volume loses every file on the next ` +
+    `restart.`
+  )
+}
 
 /** Parses a JSON body, answering 422 with the messages rather than throwing. */
 export async function parseBody<T extends z.ZodTypeAny>(
@@ -195,7 +127,7 @@ export async function parseBody<T extends z.ZodTypeAny>(
     return {
       ok: false,
       response: NextResponse.json(
-        { message: parsed.error.issues.map((issue) => issue.message) },
+        { message: parsed.error.issues.map(describeIssue) },
         { status: 422 },
       ),
     }

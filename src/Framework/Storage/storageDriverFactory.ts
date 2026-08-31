@@ -1,5 +1,5 @@
-import { S3Client } from "@aws-sdk/client-s3"
 import { createS3StorageDriver } from "./drivers/S3StorageDriver"
+import { createS3ClientFor } from "./drivers/s3Client"
 import { createLocalStorageDriver } from "./drivers/LocalStorageDriver"
 import type { StorageDriver } from "./StorageDriver"
 import type { ResolvedStorageConfig } from "./storageConfig"
@@ -22,24 +22,13 @@ export function createStorageDriverFor(config: ResolvedStorageConfig): StorageDr
 
   // A fresh client per driver, built from the configuration handed in rather
   // than from settings. `forcePathStyle` matches the active connection exactly:
-  // a destination addressed differently from the source would produce different
-  // keys for the same object.
+  // The client is built by `s3Client.ts`, which is the only module that
+  // constructs one. A destination addressed differently from the source would
+  // produce different keys for the same object, and an interoperability
+  // workaround applied on only one of the two paths would reproduce only
+  // during a migration.
   return createS3StorageDriver(async () => ({
-    client: new S3Client({
-      endpoint: config.endpoint,
-      region: config.region,
-      credentials: {
-        accessKeyId: config.accessKeyId,
-        secretAccessKey: config.secretAccessKey,
-      },
-      forcePathStyle: true,
-      // Same reasoning as `s3Client.ts`: the SDK's opportunistic validation of
-      // a multipart checksum-of-checksums makes such an object unreadable on
-      // S3-compatible servers, and a migration destination is precisely where
-      // multipart uploads happen. Response side only — measured against real
-      // Garage, the request side is fine.
-      responseChecksumValidation: "WHEN_REQUIRED",
-    }),
+    client: createS3ClientFor(config),
     bucket: config.bucket,
   }))
 }

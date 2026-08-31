@@ -221,7 +221,7 @@ export default function StorageSettingsModule() {
             <section className="flex flex-col gap-4 rounded-md border p-4">
               <h3 className="text-sm font-semibold">Active storage</h3>
 
-              {settings.storageDriver === null && (
+              {settings.deploymentStorageDriver === null && (
                 <p className="text-sm text-destructive">
                   STORAGE_DRIVER is set to a value FlowCMS does not recognise. It must be
                   <code className="mx-1">s3</code> or <code className="mx-1">local</code>. A bundled

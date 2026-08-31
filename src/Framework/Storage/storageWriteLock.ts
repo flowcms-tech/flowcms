@@ -1,6 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm"
 import { db } from "@/db/client"
 import { storageMigrations } from "@/db/tables"
+import { affectedRowCount } from "@/db/writes"
 import { triggerStorageRecovery } from "./storageRecoveryTrigger"
 
 /**
@@ -158,8 +159,9 @@ export async function acquireCutoverLock(
     .set({ status: "cutting_over", cutoverStartedAt: new Date(), updatedAt: new Date() })
     .where(and(eq(storageMigrations.id, migrationId), eq(storageMigrations.status, fromStatus)))
 
-  // The adapter reports affected rows; anything other than exactly one means
-  // somebody else moved this job first.
-  const changed = (result as unknown as { rowsAffected?: number; rowCount?: number })
-  return (changed.rowsAffected ?? changed.rowCount ?? 0) === 1
+  // Anything other than exactly one row means somebody else moved this job
+  // first. Counted through `affectedRowCount`, which knows all three driver
+  // shapes — reading `rowsAffected` alone is libsql-only, and on PostgreSQL and
+  // MySQL it reports zero for a write that succeeded.
+  return affectedRowCount(result) === 1
 }

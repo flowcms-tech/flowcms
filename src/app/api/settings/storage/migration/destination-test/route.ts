@@ -5,7 +5,6 @@ import {
   migrationErrorResponse,
   parseBody,
 } from "@/Framework/Storage/Migration/migrationApi"
-
 /**
  * Proving the destination works before anything depends on it.
  *

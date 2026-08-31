@@ -57,6 +57,13 @@
       "when": 1788100000000,
       "tag": "0007_migration_orchestration",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1788200000000,
+      "tag": "0008_inventory_generation",
+      "breakpoints": true
     }
   ]
 }

@@ -137,7 +137,19 @@ async function assertNoSymlinkEscape(root: string, target: string): Promise<void
     throw new UnsafeStorageKeyError("it resolves through a symbolic link")
   }
 
-  const real = await fs.realpath(existing).catch(() => null)
+  // `turbopackIgnore` is a BUILD hint and changes nothing at runtime.
+  //
+  // Turbopack's static analysis sees a filesystem read whose path it cannot
+  // determine and conservatively assumes the whole project might be needed at
+  // runtime, so it traces every source file — including `public/` — into the
+  // server output. Its own warning names the consequence: slower deploys, and
+  // failures where a size limit applies.
+  //
+  // The assumption is wrong here for a reason worth stating: this path is a
+  // media object's location under a root the DEPLOYMENT configured, resolved
+  // per request. It is never a module, so nothing the tracer could bundle would
+  // help, and the containment check below still runs on whatever comes back.
+  const real = await fs.realpath(/* turbopackIgnore: true */ existing).catch(() => null)
   if (real === null) return
   assertInside(root, real)
 }

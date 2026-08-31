@@ -61,6 +61,16 @@ export async function GET(
   return new NextResponse(new Uint8Array(body), {
     headers: {
       "Content-Type": CONTENT_TYPES[getFileExtension(objectKey)] ?? "application/octet-stream",
+      // DEFENCE IN DEPTH, matching the private media route.
+      //
+      // Two checks above already make the fallback branch unreachable: the key
+      // must have an image category, and every image extension has an entry in
+      // CONTENT_TYPES. But this response is ANONYMOUS and served from the
+      // public origin, so the cost of being wrong is stored XSS on the site
+      // itself — and the header costs a browser nothing. Without it, a
+      // response that ever did fall through to octet-stream could be sniffed as
+      // markup and rendered.
+      "X-Content-Type-Options": "nosniff",
       // Safe because the File Manager names uploads uniquely rather than
       // overwriting in place. Revisit if keys ever become mutable.
       "Cache-Control": "public, max-age=31536000, immutable",

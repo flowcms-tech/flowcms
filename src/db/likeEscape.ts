@@ -60,3 +60,17 @@ export function likeContains(column: Column, value: string): SQL {
   const pattern = `%${escapeLikePattern(value)}%`
   return sql`${column} LIKE ${pattern} ESCAPE ${LIKE_ESCAPE_CHAR}`
 }
+
+/**
+ * `column LIKE '<value>%' ESCAPE '\x27` with `value` treated as literal text.
+ *
+ * The anchored sibling of `likeContains`. Anchoring matters where the answer is
+ * a containment question rather than a search one: "is anything stored UNDER
+ * this path" must not also match a path that merely mentions it in the middle,
+ * and on an ordered index a leading-anchored pattern is a range scan rather
+ * than a full one.
+ */
+export function likeStartsWith(column: Column, value: string): SQL {
+  const pattern = `${escapeLikePattern(value)}%`
+  return sql`${column} LIKE ${pattern} ESCAPE ${LIKE_ESCAPE_CHAR}`
+}

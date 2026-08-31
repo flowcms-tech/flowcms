@@ -1,5 +1,6 @@
 import { S3Client } from "@aws-sdk/client-s3"
 import { getS3Config } from "@/Framework/Settings/SettingsService"
+import { S3_COMPATIBILITY_OPTIONS } from "./s3ClientOptions"
 
 /**
  * The S3 driver's connection to its bucket.
@@ -26,55 +27,38 @@ export interface S3Connection {
   bucket: string
 }
 
+/**
+ * An S3 client for AN ARBITRARY location.
+ *
+ * THE ONLY PLACE AN `S3Client` IS CONSTRUCTED. The migration factory used to
+ * build its own, with the same options copied out — so the compatibility
+ * settings existed twice and could drift apart, and "the AWS SDK lives inside
+ * the s3 driver" stopped being true the moment a second module imported it.
+ */
+export function createS3ClientFor(config: {
+  endpoint?: string
+  region?: string
+  accessKeyId: string
+  secretAccessKey: string
+}): S3Client {
+  return new S3Client({
+    endpoint: config.endpoint,
+    region: config.region,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+    // See s3ClientOptions.ts: path-style addressing, and the one deviation
+    // from the SDK's checksum defaults that S3-compatible servers need.
+    ...S3_COMPATIBILITY_OPTIONS,
+  })
+}
+
 export async function getS3Connection(): Promise<S3Connection> {
   const config = await getS3Config()
 
   return {
-    client: new S3Client({
-      endpoint: config.endpoint,
-      region: config.region,
-      credentials: {
-        accessKeyId: config.accessKeyId,
-        secretAccessKey: config.secretAccessKey,
-      },
-      // Load-bearing for Garage and every other non-AWS S3-compatible
-      // provider, and assumed by `backfillContentImageUrls.ts` when it derives
-      // an object key from a presigned URL's first path segment.
-      forcePathStyle: true,
-      /**
-       * DO NOT let the SDK validate checksums on RESPONSES.
-       *
-       * Recent AWS SDK v3 versions default this to `WHEN_SUPPORTED`, which
-       * validates `x-amz-checksum-crc32` when a response carries one. On AWS
-       * that is fine. On an S3-COMPATIBLE server it is not: a multipart
-       * upload's checksum is a checksum OF THE PART CHECKSUMS, not of the whole
-       * object, and implementations differ on how they compute and return it.
-       * Garage returns a value the SDK rejects, so a multipart-uploaded object
-       * was written successfully and then became unreadable —
-       *
-       *   Checksum mismatch: expected "O4buDA==" but received "z3IZkA=="
-       *
-       * — which a migration hit the moment it read an object back to verify it.
-       * Found against a real Garage instance; no test with a mocked SDK could
-       * have.
-       *
-       * NARROWED IN PHASE 4b2 AFTER MEASURING. Phase 4b1 also set
-       * `requestChecksumCalculation`, which turned out to be unnecessary:
-       * against real Garage, request-side checksums are fine and only the
-       * RESPONSE validation fails. Leaving the request side at the SDK default
-       * keeps the CRC32 that a correctly-implementing server can use to detect
-       * corruption in transit, and deviates from the vendor's behaviour in
-       * exactly one place instead of two.
-       *
-       * `WHEN_REQUIRED` is not "never": the SDK still validates where a
-       * response explicitly opts in, and still SENDS the checksums operations
-       * like `DeleteObjects` mandate. What is lost is opportunistic validation
-       * of GET responses — and for migrated content FlowCMS replaces it with
-       * something stronger, comparing SHA-256 over the actual bytes.
-       */
-      responseChecksumValidation: "WHEN_REQUIRED",
-
-    }),
+    client: createS3ClientFor(config),
     bucket: config.bucket,
   }
 }

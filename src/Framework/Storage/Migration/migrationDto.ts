@@ -116,6 +116,15 @@ export interface MigrationSnapshot {
     mode: string
     cutoverAt: string | null
   } | null
+  /**
+   * Past relocations, newest first — including the open one.
+   *
+   * THE AUDIT TRAIL, and it is never pruned. A completed migration records an
+   * irreversible change to where an installation keeps everything it has;
+   * silently discarding that after some interval is not a default anybody
+   * should get without asking for it.
+   */
+  history: MigrationJobDto[]
 }
 
 export interface JobDtoInput {

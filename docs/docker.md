@@ -328,6 +328,27 @@ variables are for: preparing a destination, not switching to one.
    up on anything that changed since the analysis and commits the switch in a
    single transaction.
 
+### Progress, pausing and resuming
+
+The analysis and the transfer run in **bounded batches on the server**, driven
+from the storage settings page. Every batch that finishes is written to the
+database before the next one starts, so:
+
+- **Closing the page pauses the migration safely.** Nothing is lost, nothing is
+  half-copied, and reopening the page resumes from exactly where it stopped.
+- It does **not** continue on its own while the page is closed. FlowCMS has no
+  background job runner, and inventing one that only lives inside a request
+  would lose work on the next restart rather than survive it.
+- A different admin, a different browser, or the same one an hour later can pick
+  the same migration up — the position is in the database, not in the tab.
+- The **cutover** is the exception: once confirmed it runs to completion in one
+  request, inside a bounded window. If it is interrupted, FlowCMS resolves it
+  from durable state on the next request — see the note at the end of this
+  section.
+
+For a large store this means leaving the tab open until the copy finishes, or
+returning to it periodically and pressing Resume.
+
 ### The two modes
 
 | Mode | What FlowCMS does |

@@ -39,10 +39,10 @@ import { db, databaseDialect } from "./client"
 type Row<T extends SQLiteTable> = T["$inferSelect"]
 type Insertable<T extends SQLiteTable> = T["$inferInsert"]
 
-function usesReturning(): boolean {
+function usesReturning(dialect: typeof databaseDialect = databaseDialect): boolean {
   // MariaDB's MySQL-compatible mode does not implement RETURNING for the
   // statements Drizzle's mysql2 driver emits, so it is grouped with MySQL.
-  return databaseDialect === "sqlite" || databaseDialect === "postgresql"
+  return dialect === "sqlite" || dialect === "postgresql"
 }
 
 /**
@@ -199,11 +199,23 @@ export async function upsert<T extends SQLiteTable>(
      * SQLite/PostgreSQL only and fails on MySQL and MariaDB.
      */
     executor?: Pick<typeof db, "insert">
+    /**
+     * Which dialect that executor speaks.
+     *
+     * REQUIRED WHENEVER `executor` IS. The branch below is the whole reason
+     * this helper exists, and it used to read the APPLICATION's dialect even
+     * when handed somebody else's handle — so an injected MySQL executor was
+     * given `onConflictDoUpdate`, which the MySQL builder does not have, and
+     * the promise in the note above ("still gets the dialect branching from
+     * here") was not kept. Defaults to the application's, which is correct for
+     * every caller that does not inject one.
+     */
+    dialect?: typeof databaseDialect
   },
 ): Promise<void> {
   const executor = options.executor ?? db
 
-  if (usesReturning()) {
+  if (usesReturning(options.dialect ?? databaseDialect)) {
     await executor
       .insert(table)
       .values(values as never)

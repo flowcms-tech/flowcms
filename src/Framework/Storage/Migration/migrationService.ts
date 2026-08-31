@@ -91,6 +91,8 @@ export interface MigrationServiceDeps {
 export const MAX_BATCH_SIZE = 500
 export const MAX_PAGE_SIZE = 200
 export const MAX_CONCURRENCY = 8
+/** How many past relocations the storage screen lists. */
+export const HISTORY_LIMIT = 20
 
 export function createMigrationService(deps: MigrationServiceDeps) {
   const { repository } = deps
@@ -134,7 +136,26 @@ export function createMigrationService(deps: MigrationServiceDeps) {
       job: await describeActiveJob(),
       recovery: recovery && recovery.outcome !== "idle" ? recovery : null,
       lastCompleted: await describeLastCompleted(),
+      history: await history(HISTORY_LIMIT),
     }
+  }
+
+  /**
+   * Past relocations, newest first, read-only.
+   *
+   * Bounded rather than paginated: the list is short by nature — an
+   * installation relocates its storage a handful of times in its life — and a
+   * paginated history screen for three rows would be ceremony. The full
+   * per-entry report of any one of them is still reachable through `entries`.
+   */
+  async function history(limit = HISTORY_LIMIT) {
+    const rows = await repository.listRecent(clamp(limit, 1, MAX_PAGE_SIZE))
+    return Promise.all(rows.map((row) => jobDtoFor(row)))
+  }
+
+  /** One migration, open or finished. Read-only by construction. */
+  async function describeJob(migrationId: string) {
+    return jobDtoFor(await requireReadableJob(migrationId))
   }
 
   async function describeLastCompleted() {
@@ -182,7 +203,9 @@ export function createMigrationService(deps: MigrationServiceDeps) {
     filter: { classification?: string; state?: string },
     page: { limit: number; offset: number },
   ) {
-    const job = await requireJob(migrationId)
+    // READABLE, not open. The per-key report of a finished migration is the
+    // most useful part of its audit trail.
+    const job = await requireReadableJob(migrationId)
     const limit = clamp(page.limit, 1, MAX_PAGE_SIZE)
     const offset = Math.max(0, Math.floor(page.offset))
 
@@ -279,7 +302,7 @@ export function createMigrationService(deps: MigrationServiceDeps) {
    * first while the migration reports success.
    */
   async function testDestination(migrationId: string) {
-    const job = await requireJob(migrationId)
+    const job = await requireOpenJob(migrationId)
     if (job.status !== "draft" && job.status !== "destination_tested") {
       throw new MigrationServiceError(409, [
         "The destination can only be tested before the inventory has run.",
@@ -317,7 +340,7 @@ export function createMigrationService(deps: MigrationServiceDeps) {
 
   /** One bounded inventory batch. Resumable from the database alone. */
   async function runInventoryBatch(migrationId: string, options: { batchSize?: number } = {}) {
-    const job = await requireJob(migrationId)
+    const job = await requireOpenJob(migrationId)
 
     // Every state from which a FRESH analysis makes sense — including
     // `ready_to_cutover`, because an operator who has just fixed something at
@@ -339,7 +362,10 @@ export function createMigrationService(deps: MigrationServiceDeps) {
         sourceScanCompletedAt: null,
         destinationCursor: null,
         destinationScanCompletedAt: null,
-        inventoryStartedAt: new Date(),
+        // A NEW GENERATION, so everything this pass records is stamped with it
+        // and anything left from the last one is recognisable as stale — with
+        // no dependence on any node's clock.
+        inventoryGeneration: job.inventoryGeneration + 1,
         extrasAcknowledged: false,
         extrasAcknowledgedAt: null,
         extrasAcknowledgedCount: 0,
@@ -399,7 +425,7 @@ export function createMigrationService(deps: MigrationServiceDeps) {
     migrationId: string,
     options: { batchSize?: number; concurrency?: number } = {},
   ) {
-    const job = await requireJob(migrationId)
+    const job = await requireOpenJob(migrationId)
     const mode = job.mode as MigrationMode
 
     if (job.status === "ready") {
@@ -518,7 +544,7 @@ export function createMigrationService(deps: MigrationServiceDeps) {
    * or, if it ever "succeeded", would have overwritten somebody else's file.
    */
   async function retryFailed(migrationId: string) {
-    const job = await requireJob(migrationId)
+    const job = await requireOpenJob(migrationId)
     const retried = await repository.retryFailedEntries(job.id)
     if (retried === 0) {
       throw new MigrationServiceError(422, [
@@ -533,7 +559,10 @@ export function createMigrationService(deps: MigrationServiceDeps) {
         sourceScanCompletedAt: null,
         destinationCursor: null,
         destinationScanCompletedAt: null,
-        inventoryStartedAt: new Date(),
+        // A NEW GENERATION, so everything this pass records is stamped with it
+        // and anything left from the last one is recognisable as stale — with
+        // no dependence on any node's clock.
+        inventoryGeneration: job.inventoryGeneration + 1,
       })
     }
     return { retried, job: await describeActiveJob() }
@@ -550,7 +579,7 @@ export function createMigrationService(deps: MigrationServiceDeps) {
    * three hundred.
    */
   async function acknowledgeExtras(migrationId: string, expectedVersion: number) {
-    const job = await requireJob(migrationId)
+    const job = await requireOpenJob(migrationId)
     if (job.version !== expectedVersion) {
       throw new MigrationServiceError(409, [
         "This migration changed while you were looking at it. Reload and try again.",
@@ -584,7 +613,7 @@ export function createMigrationService(deps: MigrationServiceDeps) {
    * the ownership record were ever wrong, data the migration did not put there.
    */
   async function cancel(migrationId: string, expectedVersion: number, reason?: string) {
-    const job = await requireJob(migrationId)
+    const job = await requireOpenJob(migrationId)
     if (job.status === "cutting_over") {
       throw new MigrationServiceError(409, [
         "This migration is in the middle of its cutover and cannot be cancelled. Either the " +
@@ -622,7 +651,7 @@ export function createMigrationService(deps: MigrationServiceDeps) {
    * critical section, and the two would drift.
    */
   async function cutover(migrationId: string): Promise<CutoverResult> {
-    const job = await requireJob(migrationId)
+    const job = await requireOpenJob(migrationId)
     const { source, destination } = await drivers(job)
 
     return performCutover(job.id, {
@@ -653,19 +682,42 @@ export function createMigrationService(deps: MigrationServiceDeps) {
     return config ? storageLocationId(config) : null
   }
 
-  async function requireJob(migrationId: string): Promise<MigrationRow> {
+  /**
+   * The job a MUTATION may act on.
+   *
+   * SCOPED TO THE OPEN JOB. Ids are opaque UUIDs, but a request that names a
+   * finished migration and asks to advance it should be refused on what it IS
+   * rather than on whether the caller could guess the id. A completed
+   * relocation is a historical record and nothing may move it.
+   */
+  async function requireOpenJob(migrationId: string): Promise<MigrationRow> {
     const job = await repository.findById(migrationId)
     if (!job) throw new MigrationServiceError(404, ["That migration does not exist."])
 
-    // SCOPED TO THE OPEN JOB. Ids are opaque UUIDs, but a request that names a
-    // finished migration and asks to advance it should be refused on what it
-    // IS rather than on whether the caller could guess it.
     const active = await repository.findActive()
     if (!active || active.id !== job.id) {
       throw new MigrationServiceError(409, [
-        "That migration is finished. Reload to see the current state.",
+        "That migration is finished. It can still be read, but not changed.",
       ])
     }
+    return job
+  }
+
+  /**
+   * The job a READ may look at — open or finished.
+   *
+   * A completed migration is the record of an irreversible change to where an
+   * installation keeps everything it has. Phase 4c made it unreadable the
+   * moment it finished, which meant "what did that migration actually do" had
+   * no answer six weeks later.
+   *
+   * Reading is still admin-only: the floor is in ROUTE_POLICIES, and it is the
+   * same for an old job as for the current one. Being finished changes what may
+   * be DONE to a migration, never who may see it.
+   */
+  async function requireReadableJob(migrationId: string): Promise<MigrationRow> {
+    const job = await repository.findById(migrationId)
+    if (!job) throw new MigrationServiceError(404, ["That migration does not exist."])
     return job
   }
 
@@ -721,6 +773,8 @@ export function createMigrationService(deps: MigrationServiceDeps) {
   return {
     snapshot,
     describeActiveJob,
+    describeJob,
+    history,
     entries,
     create,
     testDestination,

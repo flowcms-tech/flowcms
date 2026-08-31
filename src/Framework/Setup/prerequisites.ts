@@ -176,6 +176,11 @@ export async function checkStoragePrerequisite(): Promise<StoragePrerequisite> {
  */
 function classifyStorageFailure(error: unknown): StoragePrerequisite {
   if (!(error instanceof StorageConfigurationError)) return "unavailable"
+  // Not a configuration fault: FlowCMS could not establish WHICH location is
+  // active, which is a backend problem and not something the operator can fix
+  // on the settings screen. Mirrors `checkStorage`, which reports the same case
+  // as `connection_failed`.
+  if (error.problem === "active_topology_unavailable") return "unavailable"
   return error.problem === "s3_incomplete" ? "not_configured" : "misconfigured"
 }
 

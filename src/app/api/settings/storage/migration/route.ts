@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from "next/server"
 import {
-  acknowledgeSchema,
-  cancelSchema,
-  createMigrationSchema,
   guardMigrationRequest,
   migrationErrorResponse,
   parseBody,
 } from "@/Framework/Storage/Migration/migrationApi"
+import {
+  acknowledgeSchema,
+  cancelSchema,
+  createMigrationSchema,
+} from "@/Framework/Storage/Migration/migrationRequests"
 import { recordActivity } from "@/db/activityLog"
 import { requireApiAuth } from "@/Framework/Auth/apiAuth"
-
 /**
  * The storage migration itself: read it, start one, acknowledge, cancel.
  *
@@ -29,12 +30,30 @@ export async function GET(request: NextRequest) {
   const gate = await guardMigrationRequest(request)
   if (!gate.ok) return gate.response
 
+  // A named migration is read ON ITS OWN, open or finished. The snapshot
+  // describes the installation right now; this answers "what did that one do",
+  // which is the question a completed relocation has to keep answering.
+  const migrationId = new URL(request.url).searchParams.get("migrationId")
+  if (migrationId !== null) {
+    if (!UUID.test(migrationId)) {
+      return NextResponse.json({ message: "Not a migration id." }, { status: 422 })
+    }
+    try {
+      return NextResponse.json({ data: await gate.service.describeJob(migrationId), message: "OK" })
+    } catch (error) {
+      return migrationErrorResponse(error)
+    }
+  }
+
   try {
     return NextResponse.json({ data: await gate.service.snapshot(), message: "OK" })
   } catch (error) {
     return migrationErrorResponse(error)
   }
 }
+
+/** Matches the id format the rest of this API validates with Zod. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export async function POST(request: NextRequest) {
   const gate = await guardMigrationRequest(request)

@@ -78,8 +78,6 @@ export type StorageConfigProblem =
   | "s3_incomplete"
   /** Driver is `local`, but `LOCAL_STORAGE_PATH` is unset. */
   | "local_path_missing"
-  /** Driver is `local` and the root cannot be created, read or written. */
-  | "local_path_unusable"
   /**
    * A completed installation could not record, or could not confirm, which
    * storage location is active.

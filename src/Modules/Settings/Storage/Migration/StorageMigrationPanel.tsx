@@ -227,11 +227,7 @@ export default function StorageMigrationPanel({ snapshot, onRefresh }: Props) {
           <Progress job={job} />
           <div className="flex flex-wrap gap-2">
             <ElementButton type="button" onClick={drive} isLoading={running}>
-              {job.status === 'destination_tested' || job.status === 'inventorying'
-                ? 'Analyse both sides'
-                : job.mode === 'copy'
-                  ? 'Copy and verify the files'
-                  : 'Verify the destination'}
+              {actionLabel(job)}
             </ElementButton>
             {running && (
               <ElementButton
@@ -246,9 +242,17 @@ export default function StorageMigrationPanel({ snapshot, onRefresh }: Props) {
             )}
             {!running && <CancelButton job={job} busy={busy} guard={guard} />}
           </div>
+          {/* SAID PLAINLY, because the alternative is an operator who closes
+              the tab, comes back to an unfinished migration, and concludes it
+              failed. FlowCMS has no background job runner, so this browser is
+              what asks the server for the next batch — but every batch that
+              finished is durable, so closing the page pauses rather than
+              loses. */}
           <p className="text-xs text-muted-foreground">
-            This runs in bounded batches on the server. You can close this page at any point —
-            everything finished so far is saved, and reopening picks up exactly where it stopped.
+            This runs in bounded batches on the server, driven from this page. <strong>Closing the
+            page pauses it safely</strong> — every batch that finished is saved, nothing is lost,
+            and reopening resumes from exactly where it stopped. It does not continue on its own
+            while the page is closed.
           </p>
         </div>
       )}
@@ -363,6 +367,22 @@ function CompletedNotice({ snapshot }: { snapshot: MigrationSnapshot }) {
       </p>
     </div>
   )
+}
+
+/**
+ * What the button does next, in the operator's terms.
+ *
+ * "Resume" rather than "Copy the files" once anything has been done, because
+ * the two describe different situations and only one of them is true when
+ * somebody reopens the page on a half-finished migration.
+ */
+function actionLabel(job: MigrationJob): string {
+  if (job.status === 'destination_tested' || job.status === 'inventorying') {
+    return job.progress.total > 0 ? 'Resume the analysis' : 'Analyse both sides'
+  }
+  const started = job.progress.verified > 0 || job.progress.failed > 0
+  if (job.mode === 'verify') return started ? 'Resume verifying' : 'Verify the destination'
+  return started ? 'Resume copying' : 'Copy and verify the files'
 }
 
 function StatusBadge({ job }: { job: MigrationJob }) {

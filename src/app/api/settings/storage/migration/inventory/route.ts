@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import {
-  batchSchema,
   guardMigrationRequest,
   migrationErrorResponse,
   parseBody,
 } from "@/Framework/Storage/Migration/migrationApi"
-
+import {
+  batchSchema,
+} from "@/Framework/Storage/Migration/migrationRequests"
 /**
  * One bounded batch of inventory.
  *

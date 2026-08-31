@@ -1,5 +1,7 @@
-import { and, asc, desc, eq, inArray, isNull, lt, ne, notInArray, sql } from "drizzle-orm"
-import { upsert } from "@/db/writes"
+import { and, asc, desc, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm"
+import { likeStartsWith } from "@/db/likeEscape"
+import { affectedRowCount, upsert } from "@/db/writes"
+import type { DatabaseDialect } from "@/Framework/Config/databaseConfig"
 import type { db as AppDb } from "@/db/client"
 import type { storageMigrations as MigrationsTable, storageMigrationEntries as EntriesTable } from "@/db/tables"
 import {
@@ -35,6 +37,14 @@ export interface MigrationRepositoryDeps {
   db: typeof AppDb
   migrations: typeof MigrationsTable
   entries: typeof EntriesTable
+  /**
+   * Which engine `db` speaks.
+   *
+   * Only needed by callers that inject a handle other than the application's —
+   * a test over a temporary database, say. Without it, `upsert` would branch on
+   * the ambient dialect and hand a MySQL builder PostgreSQL syntax.
+   */
+  dialect?: DatabaseDialect
 }
 
 export type MigrationRow = typeof MigrationsTable.$inferSelect
@@ -64,7 +74,7 @@ export class MigrationAlreadyActiveError extends Error {
 }
 
 export function createMigrationRepository(deps: MigrationRepositoryDeps) {
-  const { db, migrations, entries } = deps
+  const { db, migrations, entries, dialect } = deps
 
   /** The open job, if any. At most one may exist. */
   async function findActive(): Promise<MigrationRow | null> {
@@ -93,6 +103,27 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
       .orderBy(desc(migrations.cutoverAt))
       .limit(1)
     return (rows[0] as MigrationRow | undefined) ?? null
+  }
+
+  /**
+   * The most recent relocations, finished or not.
+   *
+   * THE AUDIT TRAIL. A completed migration is the record of an irreversible
+   * change to where an installation stores everything it has, and Phase 4c left
+   * it unreadable the moment it finished: the only reader was scoped to the
+   * OPEN job. An operator asking "what did that migration actually do" six
+   * weeks later had nowhere to look.
+   *
+   * Nothing is ever deleted here. A retention policy is a decision somebody
+   * should make deliberately, and silently discarding the record of a storage
+   * relocation is not a default worth having.
+   */
+  async function listRecent(limit: number): Promise<MigrationRow[]> {
+    return db
+      .select()
+      .from(migrations)
+      .orderBy(desc(migrations.createdAt))
+      .limit(limit) as Promise<MigrationRow[]>
   }
 
   async function findById(id: string): Promise<MigrationRow | null> {
@@ -193,8 +224,7 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
       })
       .where(and(eq(migrations.id, id), eq(migrations.version, expectedVersion)))
 
-    const affected = (result as unknown as { rowsAffected?: number; rowCount?: number })
-    if ((affected.rowsAffected ?? affected.rowCount ?? 0) !== 1) {
+    if (affectedRowCount(result) !== 1) {
       throw new MigrationTransitionError(
         "version_conflict",
         "That migration changed while this request was working on it. Reload and try again.",
@@ -227,8 +257,7 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
       .set({ ...fields, version: expectedVersion + 1, updatedAt: new Date() })
       .where(and(eq(migrations.id, id), eq(migrations.version, expectedVersion)))
 
-    const affected = result as unknown as { rowsAffected?: number; rowCount?: number }
-    if ((affected.rowsAffected ?? affected.rowCount ?? 0) !== 1) {
+    if (affectedRowCount(result) !== 1) {
       throw new MigrationTransitionError(
         "version_conflict",
         "That migration changed while this request was working on it. Reload and try again.",
@@ -268,6 +297,8 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
       key: string
       /** How the DESTINATION would distinguish this key. See the schema note. */
       normalizedKey?: string | null
+      /** The inventory pass observing it. See `resolveUnseenEntries`. */
+      seenInGeneration?: number | null
       kind: "file" | "directory"
       classification: string
       state: string
@@ -285,6 +316,7 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
       migrationId,
       key: entry.key,
       normalizedKey: entry.normalizedKey ?? null,
+      seenInGeneration: entry.seenInGeneration ?? null,
       kind: entry.kind,
       classification: entry.classification,
       state: entry.state,
@@ -309,8 +341,10 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
       {
         target: [entries.migrationId, entries.key],
         executor: db,
+        dialect,
         set: {
           normalizedKey: values.normalizedKey,
+          seenInGeneration: values.seenInGeneration,
           kind: values.kind,
           classification: values.classification,
           state: values.state,
@@ -410,8 +444,7 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
           ),
         )
 
-      const affected = result as unknown as { rowsAffected?: number; rowCount?: number }
-      if ((affected.rowsAffected ?? affected.rowCount ?? 0) === 1) {
+      if (affectedRowCount(result) === 1) {
         claimed.push({ ...row, claimedBy: runId })
       }
     }
@@ -563,12 +596,23 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
   /**
    * Resolves rows the current inventory pass did not see.
    *
+   * MEMBERSHIP BY GENERATION, NEVER BY CLOCK. Phase 4c compared each entry’s
+   * `updatedAt` against the moment the pass began, which makes correctness
+   * depend on the wall clocks of every node that writes: two replicas a second
+   * apart, or one NTP correction mid-scan, and a row that WAS seen looks stale.
+   * The consequence is not cosmetic — a stale-looking owned row has its
+   * destination copy reconciled away.
+   *
+   * The generation is handed out by the database and stamped on every
+   * observation, so "not stamped N" is a fact rather than an inference, and a
+   * retried page writes the same stamp rather than a newer time.
+   *
    * A re-run must not leave behind entries for keys since deleted from the
-   * source: they would sit as unprocessed work and block readiness forever.
-   * But an entry THIS MIGRATION ALREADY WROTE TO THE DESTINATION cannot simply
-   * be deleted — losing the ownership flag would either strand a stale
-   * destination object or, worse, license deleting one the migration never
-   * owned. So the two cases are separated:
+   * source: they would sit as unprocessed work and block readiness forever. But
+   * an entry THIS MIGRATION ALREADY WROTE TO THE DESTINATION cannot simply be
+   * deleted — losing the ownership flag would either strand a stale destination
+   * object or, worse, license deleting one the migration never owned. So the
+   * two cases are separated:
    *
    *   never written by us  ->  the row is bookkeeping; remove it
    *   written by us        ->  the destination holds a copy of something that
@@ -576,27 +620,70 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
    *                            `source_deleted` so final reconciliation removes
    *                            the copy it owns.
    */
-  async function resolveUnseenEntries(migrationId: string, seenSince: Date): Promise<void> {
+  async function resolveUnseenEntries(migrationId: string, generation: number): Promise<void> {
+    // `IS NULL` is part of "not seen": rows written before this column existed
+    // carry no stamp, and the current pass re-records anything still present.
+    const notSeen = or(
+      isNull(entries.seenInGeneration),
+      ne(entries.seenInGeneration, generation),
+    )
+
     await db
       .update(entries)
       .set({ state: "source_deleted", updatedAt: new Date() })
       .where(
-        and(
-          eq(entries.migrationId, migrationId),
-          lt(entries.updatedAt, seenSince),
-          eq(entries.createdByMigration, true),
-        ),
+        and(eq(entries.migrationId, migrationId), notSeen, eq(entries.createdByMigration, true)),
       )
 
     await db
       .delete(entries)
       .where(
+        and(eq(entries.migrationId, migrationId), notSeen, eq(entries.createdByMigration, false)),
+      )
+  }
+
+  /**
+   * A FILE already recorded at exactly this destination path.
+   *
+   * The ancestor half of the file/directory collision check: a key like
+   * `2026/thumb.jpg` needs a FOLDER at `2026`, and an entry that is a FILE
+   * there makes both impossible to store. One indexed equality per path
+   * component, and the components of a media key are few.
+   */
+  async function findFileAtNormalizedPath(migrationId: string, path: string) {
+    const rows = await db
+      .select()
+      .from(entries)
+      .where(
         and(
           eq(entries.migrationId, migrationId),
-          lt(entries.updatedAt, seenSince),
-          eq(entries.createdByMigration, false),
+          eq(entries.normalizedKey, path),
+          eq(entries.kind, "file"),
         ),
       )
+      .limit(1)
+    return rows[0] ?? null
+  }
+
+  /**
+   * Anything recorded UNDER this destination path.
+   *
+   * The descendant half of the same check, for the order the ancestor lookup
+   * cannot catch: `2026/thumb.jpg` recorded first, then `2026` as a file. An
+   * anchored `LIKE` over the ordered `(migrationId, normalizedKey)` index is a
+   * range scan, and the pattern is escaped because a real object key may
+   * contain `%` or `_` — unescaped, the key `%` would match every row in the
+   * job and report a collision against an arbitrary file.
+   */
+  async function findEntryUnderNormalizedPrefix(migrationId: string, path: string) {
+    const rows = await db
+      .select()
+      .from(entries)
+      .where(
+        and(eq(entries.migrationId, migrationId), likeStartsWith(entries.normalizedKey, `${path}/`)),
+      )
+      .limit(1)
+    return rows[0] ?? null
   }
 
   /**
@@ -688,9 +775,12 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
   return {
     findActive,
     findLastCompleted,
+    listRecent,
     findById,
     patch,
     findByNormalizedKey,
+    findFileAtNormalizedPath,
+    findEntryUnderNormalizedPrefix,
     markEntry,
     resolveUnseenEntries,
     baselineEntries,
@@ -724,4 +814,3 @@ export interface TopologySnapshot {
 }
 
 export type MigrationRepository = ReturnType<typeof createMigrationRepository>
-export { TERMINAL_STATUSES, inArray }

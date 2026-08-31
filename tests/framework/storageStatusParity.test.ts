@@ -44,10 +44,14 @@ vi.mock("@/Framework/Storage/storageWriteLock", () => ({
 }))
 
 const getS3Config = vi.fn()
+// Unpinned by default: the environment is authoritative, which is what these
+// tests vary. A spy rather than a constant so the one case that is about the
+// row being UNREADABLE can make it fail.
+const getSettingsRow = vi.fn(async () => null as unknown)
 vi.mock("@/Framework/Settings/SettingsService", () => ({
   getS3Config: () => getS3Config(),
-  // Unpinned: the environment is authoritative, which is what these tests vary.
-  getSettingsRow: () => Promise.resolve(null),
+  getSettingsRow: () => getSettingsRow(),
+  invalidateSettingsCache: () => Promise.resolve(),
 }))
 
 const { checkStorage } = await import("@/Framework/Health/readiness")
@@ -63,7 +67,11 @@ afterEach(() => {
  * The single authority for what each problem means on each surface.
  *
  * `nothing has been set` is the ONLY problem that reads as "not configured" on
- * either surface. Everything else was set by somebody and is wrong.
+ * either surface. Everything else was set by somebody and is wrong — EXCEPT
+ * `active_topology_unavailable`, which is neither: the configuration may be
+ * perfect and the database unreachable, so it is a backend failure on both
+ * sides. Reporting it as a misconfiguration would send an operator to edit
+ * settings in the middle of an outage.
  */
 const MAPPING: {
   problem: StorageConfigProblem
@@ -73,7 +81,11 @@ const MAPPING: {
   { problem: "s3_incomplete", readiness: "not_configured", prerequisite: "not_configured" },
   { problem: "driver_invalid", readiness: "misconfigured", prerequisite: "misconfigured" },
   { problem: "local_path_missing", readiness: "misconfigured", prerequisite: "misconfigured" },
-  { problem: "local_path_unusable", readiness: "misconfigured", prerequisite: "misconfigured" },
+  {
+    problem: "active_topology_unavailable",
+    readiness: "connection_failed",
+    prerequisite: "unavailable",
+  },
 ]
 
 describe("both surfaces classify the same problem the same way", () => {
@@ -92,6 +104,12 @@ describe("both surfaces classify the same problem the same way", () => {
       else if (problem === "s3_incomplete") {
         vi.stubEnv("STORAGE_DRIVER", "s3")
         getS3Config.mockRejectedValue(new Error("S3 is not configured"))
+      } else if (problem === "active_topology_unavailable") {
+        // The one problem that is NOT reachable through configuration: it means
+        // a completed installation could not read or record which location it
+        // uses. Driven the only way it actually happens — the settings row
+        // cannot be read at all.
+        getSettingsRow.mockRejectedValueOnce(new Error("database is down"))
       } else {
         vi.stubEnv("STORAGE_DRIVER", "local")
         vi.stubEnv("LOCAL_STORAGE_PATH", "")
@@ -134,9 +152,9 @@ describe("every problem code is accounted for", () => {
     // surface, this fails rather than letting it default silently.
     const covered = MAPPING.map((entry) => entry.problem).sort()
     const all: StorageConfigProblem[] = [
+      "active_topology_unavailable",
       "driver_invalid",
       "local_path_missing",
-      "local_path_unusable",
       "s3_incomplete",
     ]
     expect(covered).toEqual(all.sort())

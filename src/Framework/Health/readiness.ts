@@ -207,6 +207,14 @@ export async function checkDatabase(): Promise<DatabaseStatus> {
  * credentials by design — reported `not_configured` forever, and a Local
  * deployment with a broken root reported `connected` because the S3 settings
  * happened to be present.
+ *
+ * AND NOT THE ENVIRONMENT. `getActiveStorageConfig()` reads the DURABLE
+ * snapshot; the environment answers only while an installation has not pinned
+ * one. That distinction is the whole point after Phase 4: an installation that
+ * has migrated from S3 to Local still has `STORAGE_DRIVER=s3` in its .env, and
+ * a probe that read the environment would report a healthy site as
+ * misconfigured — or, worse, report S3 as connected while every file lives on a
+ * filesystem. `storageActiveTopology.test.ts` pins this across a migration.
  */
 export async function checkStorage(): Promise<StorageReadiness> {
   try {
@@ -214,6 +222,16 @@ export async function checkStorage(): Promise<StorageReadiness> {
     return { status: "connected", driver: config.driver }
   } catch (error) {
     if (error instanceof StorageConfigurationError) {
+      // NOT A CONFIGURATION PROBLEM AT ALL. `active_topology_unavailable` means
+      // a completed installation could not record or confirm WHICH location it
+      // uses — the configuration may be perfect and the database unreachable.
+      // Reporting it as `misconfigured` would send an operator to edit settings
+      // during a database outage, and claiming a driver would be inventing one:
+      // not knowing where the files are is precisely the state being reported.
+      if (error.problem === "active_topology_unavailable") {
+        return { status: "connection_failed", driver: null }
+      }
+
       // "Nothing is set up yet" versus "what is set up is wrong". A fresh
       // install sits in the first state legitimately; the second is a typo.
       //

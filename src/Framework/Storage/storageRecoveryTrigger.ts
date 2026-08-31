@@ -35,11 +35,6 @@ const DEBOUNCE_MS = 10_000
 let lastAttempt = 0
 let inFlight = false
 
-export function resetStorageRecoveryDebounce(): void {
-  lastAttempt = 0
-  inFlight = false
-}
-
 /**
  * Asks for a recovery pass, at most one at a time and at most one per window.
  *

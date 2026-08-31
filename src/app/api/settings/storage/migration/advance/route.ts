@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import {
-  advanceSchema,
   guardMigrationRequest,
   migrationErrorResponse,
   parseBody,
 } from "@/Framework/Storage/Migration/migrationApi"
-
+import {
+  advanceSchema,
+} from "@/Framework/Storage/Migration/migrationRequests"
 /**
  * One bounded batch of transfer, or a deliberate retry of what failed.
  *

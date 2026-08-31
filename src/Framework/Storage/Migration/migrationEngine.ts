@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { digestObject } from "./contentHash"
 import { StorageObjectNotFoundError } from "../StorageErrors"
-import type { MigrationMode } from "./migrationState"
+import type { EntryState, MigrationMode } from "./migrationState"
 import type { StorageDriver } from "../StorageDriver"
 
 /**
@@ -26,30 +26,15 @@ import type { StorageDriver } from "../StorageDriver"
  * entries it could no longer vouch for.
  */
 
-/** Per-entry execution progress. Distinct from classification. */
-export const ENTRY_EXECUTION_STATES = [
-  /** Classified, nothing done. */
-  "pending",
-  /** A write was STARTED. Anything found in this state after a restart is of
-   *  unknown completeness and must be re-verified, never assumed finished. */
-  "copying",
-  /** Written, not yet proven. */
-  "copied",
-  /** Read back from the destination and byte-identical to the baseline. */
-  "verified",
-  /** Transient failure; a retry may clear it. */
-  "failed",
-  /** Blocked on something a human must resolve. */
-  "blocked",
-  /** The source changed under us; the baseline no longer describes it. */
-  "source_changed",
-  /** The source went away; the baseline entry is stale. */
-  "source_deleted",
-  /** Settled by the final reconciliation. Nothing further applies. */
-  "reconciled",
-] as const
-
-export type EntryExecutionState = (typeof ENTRY_EXECUTION_STATES)[number]
+/**
+ * Per-entry execution progress.
+ *
+ * ONE LIST, IN ONE PLACE. This module used to declare its own copy beside the
+ * identical one in `migrationState.ts`, so adding a state meant remembering to
+ * add it twice — and Phase 4c added `reconciled` to both, which is the moment
+ * two lists stop being a coincidence and start being a maintenance hazard.
+ */
+export type EntryExecutionState = EntryState
 
 /** One unit of work, as the engine needs it. */
 export interface ExecutableEntry {

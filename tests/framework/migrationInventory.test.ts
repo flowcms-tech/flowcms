@@ -107,7 +107,7 @@ async function newJob(over: { mode?: "copy" | "verify"; destinationDriver?: stri
   })
   const tested = await repository.transition(created.id, created.version, "destination_tested")
   return repository.transition(tested.id, tested.version, "inventorying", {
-    inventoryStartedAt: new Date(),
+    inventoryGeneration: 1,
   } as never)
 }
 
@@ -271,7 +271,9 @@ describe("resumability", () => {
         sourceScanCompletedAt: null,
         destinationCursor: null,
         destinationScanCompletedAt: null,
-        inventoryStartedAt: new Date(Date.now() + 5),
+        // A NEW GENERATION rather than a later timestamp. Membership must not
+        // depend on any node's clock; see resolveUnseenEntries.
+        inventoryGeneration: 2,
       } as never,
     )
     await runInventory(reinventoried.id, 50)
@@ -301,7 +303,9 @@ describe("resumability", () => {
         sourceScanCompletedAt: null,
         destinationCursor: null,
         destinationScanCompletedAt: null,
-        inventoryStartedAt: new Date(Date.now() + 5),
+        // A NEW GENERATION rather than a later timestamp. Membership must not
+        // depend on any node's clock; see resolveUnseenEntries.
+        inventoryGeneration: 2,
       } as never,
     )
     await runInventory(again.id, 50)
@@ -413,5 +417,217 @@ describe("collisions across batch boundaries", () => {
     await runInventory(job.id, 1, "insensitive")
 
     expect((await repository.findEntry(job.id, "photo.png"))?.classification).toBe("matching")
+  })
+})
+
+describe("file and folder path collisions, across batches and restarts", () => {
+  /**
+   * A filesystem cannot hold a file at `2026` and a file at `2026/x.jpg` at
+   * once — one of them needs `2026` to be a directory. On S3 both are ordinary
+   * keys that coexist happily, which is precisely how a source comes to contain
+   * them.
+   *
+   * Before Phase 5 this survived inventory and failed mid-transfer as ENOTDIR
+   * or EISDIR. Safe, but the wrong layer: the operator got an errno instead of
+   * the two keys that cannot coexist. Every case below is enumerated in batches
+   * of one, so the two halves are never in memory together.
+   */
+
+  it("catches a file blocking the folder a later key needs", async () => {
+    source = scanOnlySource(["2026", "2026/x.jpg"])
+    const job = await newJob()
+
+    await runInventory(job.id, 1)
+
+    expect((await repository.findEntry(job.id, "2026/x.jpg"))?.classification).toBe("incompatible")
+  })
+
+  it("catches it in the other enumeration order too", async () => {
+    // Ascending key order puts `a/b.txt` before `a`, so the ancestor lookup
+    // cannot catch this one — the descendant scan must.
+    source = scanOnlySource(["a/b.txt", "a"])
+    const job = await newJob()
+
+    await runInventory(job.id, 1)
+
+    expect((await repository.findEntry(job.id, "a"))?.classification).toBe("incompatible")
+  })
+
+  it("marks BOTH keys, so the operator can choose which to move", async () => {
+    source = scanOnlySource(["2026", "2026/x.jpg"])
+    const job = await newJob()
+
+    await runInventory(job.id, 1)
+
+    const file = await repository.findEntry(job.id, "2026")
+    const under = await repository.findEntry(job.id, "2026/x.jpg")
+    expect(file?.classification).toBe("incompatible")
+    expect(under?.classification).toBe("incompatible")
+    expect(file?.detail).toContain("2026/x.jpg")
+    expect(under?.detail).toContain("2026")
+  })
+
+  it("names it as a path collision, not a filesystem error", async () => {
+    source = scanOnlySource(["2026", "2026/x.jpg"])
+    const job = await newJob()
+
+    await runInventory(job.id, 1)
+
+    const detail = (await repository.findEntry(job.id, "2026/x.jpg"))?.detail ?? ""
+    expect(detail).toMatch(/file and folder path collision/i)
+    expect(detail).toMatch(/will not rename/i)
+    // An operator cannot act on an errno.
+    expect(detail).not.toMatch(/ENOTDIR|EISDIR/)
+  })
+
+  it("catches a collision several levels deep", async () => {
+    source = scanOnlySource(["a/b", "a/b/c/d.txt"])
+    const job = await newJob()
+
+    await runInventory(job.id, 1)
+
+    expect((await repository.findEntry(job.id, "a/b/c/d.txt"))?.classification).toBe("incompatible")
+  })
+
+  it("treats a directory marker and a same-named file as the same clash", async () => {
+    // `foo/` and `foo` normalise to one path. That is the exact-match check,
+    // and it must not be lost now that the path-collision check sits beside it.
+    source = {
+      // Honours `after` like a real driver: a scan that ignored it would
+      // re-yield its first key forever and never reach the second.
+      async *scanEntries(options?: { after?: string }) {
+        const all = [
+          { key: "foo", kind: "file" as const, size: 1, lastModified: new Date(0) },
+          { key: "foo/", kind: "directory" as const, size: 0, lastModified: new Date(0) },
+        ]
+        for (const item of all) {
+          if (options?.after && item.key <= options.after) continue
+          yield item
+        }
+      },
+    } as unknown as StorageDriver
+    const job = await newJob()
+
+    await runInventory(job.id, 1)
+
+    expect((await repository.findEntry(job.id, "foo/"))?.classification).toBe("incompatible")
+  })
+
+  it("survives a restart: the second half is caught from the database alone", async () => {
+    // Each batch re-reads the job row, which is exactly what a restarted
+    // process does. Nothing carries over in memory.
+    source = scanOnlySource(["m", "m/n.txt"])
+    const job = await newJob()
+
+    for (let i = 0; i < 5; i += 1) {
+      const current = (await repository.findById(job.id))!
+      const result = await advanceInventory(
+        current,
+        { repository, source, destination, destinationCaseSensitivity: "sensitive" },
+        { batchSize: 1 },
+      )
+      if (result.complete) break
+    }
+
+    expect((await repository.findEntry(job.id, "m/n.txt"))?.classification).toBe("incompatible")
+  })
+
+  it("does NOT apply the rule to an S3 destination", async () => {
+    // Both are ordinary object keys. Blocking a migration between two object
+    // stores because a filesystem could not hold the pair would invent a
+    // problem the destination does not have.
+    source = scanOnlySource(["2026", "2026/x.jpg"])
+    const job = await newJob({ destinationDriver: "s3" })
+
+    await runInventory(job.id, 1, null)
+
+    expect((await repository.findEntry(job.id, "2026/x.jpg"))?.classification).toBe("missing")
+    expect((await repository.findEntry(job.id, "2026"))?.classification).toBe("missing")
+  })
+
+  it("is not fooled by a key containing LIKE wildcards", async () => {
+    // The descendant lookup is an anchored LIKE. Unescaped, the key `%` would
+    // match every row in the job and report a collision against an arbitrary
+    // unrelated file.
+    source = scanOnlySource(["%", "ordinary.txt"])
+    const job = await newJob()
+
+    await runInventory(job.id, 1)
+
+    expect((await repository.findEntry(job.id, "%"))?.classification).toBe("missing")
+    expect((await repository.findEntry(job.id, "ordinary.txt"))?.classification).toBe("missing")
+  })
+
+  it("does not report a key as colliding with itself", async () => {
+    source = scanOnlySource(["2026/08/photo.jpg"])
+    const job = await newJob()
+
+    await runInventory(job.id, 1)
+
+    expect((await repository.findEntry(job.id, "2026/08/photo.jpg"))?.classification).toBe("missing")
+  })
+})
+
+describe("inventory membership is decided by generation, not by a clock", () => {
+  it("stamps every entry the current pass records", async () => {
+    await source.uploadObject("a.txt", bytes("a"))
+    const job = await newJob()
+
+    await runInventory(job.id, 50)
+
+    expect((await repository.findEntry(job.id, "a.txt"))?.seenInGeneration).toBe(1)
+  })
+
+  it("clears a stale row even when its updatedAt is in the FUTURE", async () => {
+    // The case a wall-clock comparison gets wrong: a replica whose clock runs
+    // ahead writes a row stamped later than the next pass begins, so a
+    // timestamp check calls a deleted key "seen" forever, and it blocks
+    // readiness for good. The generation does not care what time anything
+    // happened.
+    await source.uploadObject("stays.txt", bytes("a"))
+    await source.uploadObject("goes.txt", bytes("b"))
+    const job = await newJob()
+    await runInventory(job.id, 50)
+
+    await handle.db
+      .update(handle.schema.storageMigrationEntries as never)
+      .set({ updatedAt: new Date(Date.now() + 60 * 60 * 1000) } as never)
+
+    await source.deleteObject("goes.txt")
+    const again = await repository.transition(
+      job.id,
+      (await repository.findById(job.id))!.version,
+      "inventorying",
+      {
+        sourceCursor: null,
+        sourceScanCompletedAt: null,
+        destinationCursor: null,
+        destinationScanCompletedAt: null,
+        inventoryGeneration: 2,
+      } as never,
+    )
+    await runInventory(again.id, 50)
+
+    expect(await repository.findEntry(job.id, "goes.txt")).toBeNull()
+    expect(await repository.findEntry(job.id, "stays.txt")).not.toBeNull()
+  })
+
+  it("counts a re-recorded key in the same pass once, not twice", async () => {
+    // Retried pages are normal. Stamping is idempotent where incrementing a
+    // counter would not be.
+    await source.uploadObject("a.txt", bytes("a"))
+    const job = await newJob()
+
+    await runInventory(job.id, 50)
+    const first = await repository.countEntries(job.id)
+
+    const current = (await repository.findById(job.id))!
+    await advanceInventory(
+      { ...current, sourceCursor: null, sourceScanCompletedAt: null } as never,
+      { repository, source, destination, destinationCaseSensitivity: "sensitive" },
+      { batchSize: 50 },
+    )
+
+    expect(await repository.countEntries(job.id)).toBe(first)
   })
 })
