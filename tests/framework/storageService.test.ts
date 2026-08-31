@@ -125,12 +125,14 @@ describe("client construction", () => {
       // and assumed by `backfillContentImageUrls.ts` when it derives a key from
       // a presigned URL's first path segment.
       forcePathStyle: true,
-      // ADDED IN PHASE 4b1, after a real Garage instance refused to hand back a
-      // multipart-uploaded object: the SDK's opportunistic CRC32 validation
-      // treats a multipart checksum-of-checksums as a whole-object checksum and
-      // rejects the response. FlowCMS verifies migrated content with SHA-256
-      // over the actual bytes, which is stronger than the CRC32 being skipped.
-      requestChecksumCalculation: "WHEN_REQUIRED",
+      // Added after a real Garage instance refused to hand back a
+      // multipart-uploaded object: the SDK validates a multipart
+      // checksum-of-checksums as though it were a whole-object checksum and
+      // rejects the response.
+      //
+      // RESPONSE SIDE ONLY. Phase 4b1 also overrode the request side; measuring
+      // all three combinations against real Garage showed that unnecessary, so
+      // uploads keep the SDK's CRC32 and the deviation is one setting, not two.
       responseChecksumValidation: "WHEN_REQUIRED",
     })
   })

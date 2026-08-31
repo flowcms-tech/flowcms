@@ -201,6 +201,27 @@ describe("when no cutover is running", () => {
   })
 })
 
+describe("the setup probe respects the lock", () => {
+  it("cannot write its probe object while a cutover is running", async () => {
+    // The probe writes a real object through `StorageService.uploadObject`, so
+    // it passes through the same gate as an editor's upload — and it should.
+    //
+    // In practice the two cannot coincide: a migration requires a completed
+    // installation, and `/setup` returns 404 once setup completes, so the probe
+    // is unreachable by then. Exempting it anyway would carve a hole in the
+    // gate for no benefit, and a hole is what a later change walks through.
+    // Readiness is unaffected — `checkStorage` resolves configuration and
+    // mutates nothing.
+    verdict.mockResolvedValue("locked")
+    const { checkStoragePrerequisite } = await import("@/Framework/Setup/prerequisites")
+
+    const state = await checkStoragePrerequisite()
+
+    expect(state).not.toBe("ready")
+    expect(driver.uploadObject).not.toHaveBeenCalled()
+  })
+})
+
 describe("the gate covers the whole mutating surface", () => {
   it("accounts for every method StorageService exposes", () => {
     // The guard that makes this file self-maintaining: a new method added to

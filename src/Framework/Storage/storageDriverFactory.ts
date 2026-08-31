@@ -33,10 +33,11 @@ export function createStorageDriverFor(config: ResolvedStorageConfig): StorageDr
         secretAccessKey: config.secretAccessKey,
       },
       forcePathStyle: true,
-      // Same reasoning as `s3Client.ts`: the SDK's opportunistic CRC32 makes a
-      // multipart-uploaded object unreadable on S3-compatible servers, and a
-      // migration destination is precisely where multipart uploads happen.
-      requestChecksumCalculation: "WHEN_REQUIRED",
+      // Same reasoning as `s3Client.ts`: the SDK's opportunistic validation of
+      // a multipart checksum-of-checksums makes such an object unreadable on
+      // S3-compatible servers, and a migration destination is precisely where
+      // multipart uploads happen. Response side only — measured against real
+      // Garage, the request side is fine.
       responseChecksumValidation: "WHEN_REQUIRED",
     }),
     bucket: config.bucket,

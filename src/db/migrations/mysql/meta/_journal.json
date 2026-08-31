@@ -43,6 +43,13 @@
       "when": 1787900000000,
       "tag": "0005_storage_topology",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1788000000000,
+      "tag": "0006_cutover_window",
+      "breakpoints": true
     }
   ]
 }

@@ -133,6 +133,23 @@ export const storageMigrations = sqliteTable("storage_migration", {
 
   /** When the baseline pass finished — the boundary the final delta is against. */
   baselineCompletedAt: integer("baselineCompletedAt", { mode: "timestamp_ms" }),
+
+  /**
+   * When the cutover write lock was taken.
+   *
+   * ITS OWN COLUMN, because the critical window has to be BOUNDED and
+   * `updatedAt` cannot measure it — every progress write moves `updatedAt`, so
+   * a cutover that has been reconciling for twenty minutes would look like it
+   * started a second ago. During that window every storage mutation in the
+   * application is refused, so "how long has this been going on" is the
+   * question that decides whether to abort back to the source.
+   *
+   * Also the answer a RESTART needs: a process that died holding the lock
+   * leaves the job in `cutting_over`, and recovery has to know whether that
+   * happened moments ago or last Tuesday.
+   */
+  cutoverStartedAt: integer("cutoverStartedAt", { mode: "timestamp_ms" }),
+
   cutoverAt: integer("cutoverAt", { mode: "timestamp_ms" }),
 
   createdAt: integer("createdAt", { mode: "timestamp_ms" })
@@ -232,6 +249,22 @@ export const storageMigrationEntries = sqliteTable(
     /** Why an entry is incompatible or conflicting, for the operator's report. */
     detail: text("detail"),
     attempts: integer("attempts").notNull().default(0),
+
+    /**
+     * Which run is working on this entry, and since when — a LEASE.
+     *
+     * Moving an entry to `copying` is already a durable claim: the conditional
+     * update matches only `pending`, so a second caller cannot take one that is
+     * in flight. What that alone cannot do is tell a CRASHED worker from a slow
+     * one — an entry stuck in `copying` would either be reclaimed too eagerly
+     * (two workers streaming to the same key, which on a filesystem interleaves
+     * into corruption) or never at all.
+     *
+     * The lease resolves it: a claim may be taken over only by its own run, or
+     * once it is old enough that the holder cannot plausibly still be running.
+     */
+    claimedBy: text("claimedBy"),
+    claimedAt: integer("claimedAt", { mode: "timestamp_ms" }),
 
     updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
       .notNull()

@@ -1,4 +1,4 @@
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm"
+import { and, eq, inArray, isNull, notInArray, sql } from "drizzle-orm"
 import { upsert } from "@/db/writes"
 import type { db as AppDb } from "@/db/client"
 import type { storageMigrations as MigrationsTable, storageMigrationEntries as EntriesTable } from "@/db/tables"
@@ -288,6 +288,167 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
       .where(and(eq(entries.migrationId, migrationId), eq(entries.classification, classification)))
   }
 
+  /**
+   * Takes ownership of up to `limit` entries that still need work.
+   *
+   * A CONDITIONAL UPDATE IS THE CLAIM. Selecting rows and then working on them
+   * leaves a window in which a second caller selects the same rows; moving them
+   * to `copying` in the same statement that matches `pending` means only one
+   * caller can win each entry.
+   *
+   * Reclaims a stale lease as well: an entry left `copying` by a process that
+   * died would otherwise be stranded forever, and one reclaimed too eagerly
+   * would have two workers streaming to the same key — which on a filesystem
+   * interleaves into corruption rather than a harmless duplicate write. The
+   * lease age is what separates those two cases.
+   *
+   * Returns the claimed rows, already marked, so the caller can execute them
+   * knowing nobody else will.
+   */
+  async function claimEntries(
+    migrationId: string,
+    runId: string,
+    limit: number,
+    options: { leaseMs?: number } = {},
+  ): Promise<(typeof EntriesTable.$inferSelect)[]> {
+    const leaseMs = options.leaseMs ?? 15 * 60 * 1000
+    const staleBefore = new Date(Date.now() - leaseMs)
+
+    const candidates = await db
+      .select()
+      .from(entries)
+      .where(
+        and(
+          eq(entries.migrationId, migrationId),
+          // `pending` is unclaimed work. `failed` is retryable. `copying` and
+          // `copied` are recoverable — see the coordinator, which re-verifies
+          // rather than blindly re-uploading.
+          inArray(entries.state, ["pending", "failed", "copying", "copied"]),
+        ),
+      )
+      .limit(limit * 2)
+
+    const claimed: (typeof EntriesTable.$inferSelect)[] = []
+    for (const row of candidates) {
+      if (claimed.length >= limit) break
+
+      const heldByOther =
+        row.claimedBy !== null &&
+        row.claimedBy !== runId &&
+        row.claimedAt !== null &&
+        row.claimedAt > staleBefore
+      if (heldByOther) continue
+
+      const result = await db
+        .update(entries)
+        .set({ claimedBy: runId, claimedAt: new Date(), updatedAt: new Date() })
+        .where(
+          and(
+            eq(entries.id, row.id),
+            // Guarded on the claim we READ, so two callers racing for the same
+            // row cannot both succeed.
+            row.claimedBy === null
+              ? isNull(entries.claimedBy)
+              : eq(entries.claimedBy, row.claimedBy),
+          ),
+        )
+
+      const affected = result as unknown as { rowsAffected?: number; rowCount?: number }
+      if ((affected.rowsAffected ?? affected.rowCount ?? 0) === 1) {
+        claimed.push({ ...row, claimedBy: runId })
+      }
+    }
+
+    return claimed
+  }
+
+  /**
+   * Writes what happened to one entry.
+   *
+   * The claim is RELEASED here, so a retry after a crash mid-execute finds the
+   * entry claimable again rather than stranded behind its own lease.
+   */
+  async function saveOutcome(
+    migrationId: string,
+    key: string,
+    outcome: {
+      state: string
+      createdByMigration?: boolean
+      destinationSize?: number | null
+      destinationHash?: string | null
+      detail?: string | null
+      incrementAttempts?: boolean
+    },
+  ): Promise<void> {
+    const patch: Record<string, unknown> = {
+      state: outcome.state,
+      destinationSize: outcome.destinationSize ?? null,
+      destinationHash: outcome.destinationHash ?? null,
+      detail: outcome.detail ?? null,
+      claimedBy: null,
+      claimedAt: null,
+      updatedAt: new Date(),
+    }
+
+    // OWNERSHIP IS ONLY EVER SET, NEVER CLEARED. Once this migration has
+    // written a destination object the fact is permanent: the final
+    // reconciliation may remove only what it created, and losing that flag
+    // would either strand a stale object or license deleting somebody else's.
+    if (outcome.createdByMigration) patch.createdByMigration = true
+
+    if (outcome.incrementAttempts) {
+      patch.attempts = sql`${entries.attempts} + 1`
+    }
+
+    await db
+      .update(entries)
+      .set(patch)
+      .where(and(eq(entries.migrationId, migrationId), eq(entries.key, key)))
+  }
+
+  /** Counts per execution state, for progress and the readiness gate. */
+  async function countByState(migrationId: string): Promise<Record<string, number>> {
+    const rows = await db
+      .select({ state: entries.state, n: sql<number>`count(*)` })
+      .from(entries)
+      .where(eq(entries.migrationId, migrationId))
+      .groupBy(entries.state)
+
+    const out: Record<string, number> = {}
+    for (const row of rows) out[String(row.state)] = Number(row.n)
+    return out
+  }
+
+  /** Counts per classification. */
+  async function countByClassification(migrationId: string): Promise<Record<string, number>> {
+    const rows = await db
+      .select({ classification: entries.classification, n: sql<number>`count(*)` })
+      .from(entries)
+      .where(eq(entries.migrationId, migrationId))
+      .groupBy(entries.classification)
+
+    const out: Record<string, number> = {}
+    for (const row of rows) out[String(row.classification)] = Number(row.n)
+    return out
+  }
+
+  /** Every entry this migration created at the destination. */
+  async function ownedEntries(migrationId: string) {
+    return db
+      .select()
+      .from(entries)
+      .where(and(eq(entries.migrationId, migrationId), eq(entries.createdByMigration, true)))
+  }
+
+  async function findEntry(migrationId: string, key: string) {
+    const rows = await db
+      .select()
+      .from(entries)
+      .where(and(eq(entries.migrationId, migrationId), eq(entries.key, key)))
+      .limit(1)
+    return rows[0] ?? null
+  }
+
   /** Cancelling is a transition like any other, and durable. */
   async function cancel(id: string, expectedVersion: number, reason?: string) {
     return transition(id, expectedVersion, "cancelled", {
@@ -304,6 +465,12 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
     recordEntry,
     countEntries,
     entriesByClassification,
+    claimEntries,
+    saveOutcome,
+    countByState,
+    countByClassification,
+    ownedEntries,
+    findEntry,
     cancel,
   }
 }
