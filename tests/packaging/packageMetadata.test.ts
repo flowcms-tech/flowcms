@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { readFileSync, existsSync } from "node:fs"
 import { join } from "node:path"
+import { FLOWCMS_VERSION } from "@/Framework/Config/version"
 
 /**
  * WHAT FLOWCMS PUBLISHES, pinned.
@@ -210,7 +211,7 @@ describe("the example theme is shaped like a real third-party package", () => {
 
   it("takes flowcms and react as PEERS, never as dependencies", () => {
     expect(aurora.peerDependencies).toEqual({
-      flowcms: ">=0.1.0 <0.2.0",
+      flowcms: ">=0.2.0 <0.3.0",
       react: "^19.0.0",
     })
     expect(aurora.dependencies).toBeUndefined()
@@ -218,9 +219,17 @@ describe("the example theme is shaped like a real third-party package", () => {
 
   it("bounds its flowcms peer below the next minor", () => {
     // FlowCMS is 0.x, where a minor bump is a breaking change by convention.
-    // An open-ended `>=0.1.0` would claim compatibility with a contract that
+    // An open-ended `>=0.2.0` would claim compatibility with a contract that
     // has not been written yet.
-    expect(aurora.peerDependencies.flowcms).toMatch(/<0\.2\.0/)
+    //
+    // DERIVED from FLOWCMS_VERSION rather than pinned. The literal was `<0.2.0`
+    // and went stale at the 0.2.0 release in the one way this rule cannot
+    // tolerate: the assertion still passed while the range it guarded had
+    // stopped admitting the FlowCMS beside it. What the rule means is "the
+    // minor after the current one", so that is what it now computes — a release
+    // moves the range, not this file.
+    const [major, minor] = FLOWCMS_VERSION.split(".").map(Number)
+    expect(aurora.peerDependencies.flowcms).toContain(`<${major}.${minor + 1}.0`)
   })
 
   it("ships built output and its screenshot, not TypeScript", () => {
@@ -250,7 +259,7 @@ describe("the example theme is shaped like a real third-party package", () => {
     const settings = readFileSync(join(ROOT, "packages/flowcms-theme-aurora/src/settings.ts"), "utf8")
 
     expect(aurora.version).toBe("1.2.0") // the package release
-    expect(manifest).toMatch(/flowcmsCompat:\s*"\^0\.1\.0"/) // which FlowCMS it renders against
+    expect(manifest).toMatch(/flowcmsCompat:\s*"\^0\.2\.0"/) // which FlowCMS it renders against
     expect(settings).toMatch(/version:\s*2/) // the shape of its persisted settings
   })
 })

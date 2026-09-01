@@ -1,6 +1,6 @@
 {
   "name": "flowcms",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "The public FlowCMS theme API. Install this to write a FlowCMS theme package.",
   "license": "GPL-2.0-or-later",
   "author": "FlowCMS Tech",

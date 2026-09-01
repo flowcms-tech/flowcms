@@ -1,6 +1,6 @@
 {
   "name": "create-flowcms",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Create a new FlowCMS site. Scaffolds the application, its deployment configuration and its .env, then installs dependencies.",
   "license": "GPL-2.0-or-later",
   "author": "FlowCMS Tech",

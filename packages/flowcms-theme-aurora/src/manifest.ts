@@ -17,7 +17,16 @@ export const manifest: ThemeManifest = {
   slug: "aurora",
   name: "Aurora",
   version: "1.2.0",
-  flowcmsCompat: "^0.1.0",
+  // MOVED to the new minor at the 0.2.0 release, not widened across it. Under
+  // the pre-1.0 caret rule `^0.1.0` excludes 0.2.0, so leaving it would have
+  // made the shipped fixture silently unavailable the moment FLOWCMS_VERSION
+  // moved — a theme that proves nothing because it can no longer activate.
+  // Spanning both minors was the other tempting fix and is the wrong one here:
+  // FlowCMS is 0.x, where a minor IS the breaking boundary by convention, so a
+  // range across it claims a compatibility the project does not promise. Keep
+  // in step with `peerDependencies.flowcms`, which npm resolves and this does
+  // not.
+  flowcmsCompat: "^0.2.0",
   // `sidebar` is declared by no built-in theme, so slot handling is provably
   // driven by the manifest rather than by a list hardcoded in core.
   menuSlots: ["primary", "sidebar"],

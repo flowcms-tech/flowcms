@@ -7,6 +7,74 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-01
+
+The release that makes storage a choice. FlowCMS required S3-compatible object
+storage; it now runs on the local filesystem or on S3, the two are the same
+thing to everything above them, and an installation can move from one to the
+other after it is in use.
+
+### Added
+
+- **Local filesystem storage.** A deployment no longer needs an object store, a
+  bucket or a credential to run — `/data/uploads` under Docker, `./data/uploads`
+  on local Node. The path is deployment-controlled and never accepted from a
+  browser.
+
+- **A provider-neutral `StorageDriver` seam.** Uploading, reading, deleting and
+  listing are one interface with two implementations behind it. Nothing above
+  the driver knows which one it has, which is what makes the choice a
+  deployment decision rather than a rewrite.
+
+- **An explicit, verified storage migration workflow.** Moving between backends
+  is a deliberate sequence rather than a settings toggle: test the destination,
+  take an inventory, analyse compatibility, copy, verify every object by
+  SHA-256, take a final write lock, replay the live delta, then commit the
+  cutover in one transaction. It is resumable, and it recovers from a crash in
+  the critical window using the persisted topology as the authority.
+
+  **The previous storage is always retained.** FlowCMS never empties a bucket
+  and never deletes a Local directory. Rolling back is another verified
+  migration, not a toggle.
+
+- **Authenticated private media delivery** at `/api/media/[...key]`, and
+  **public media authorisation** at `/api/public/images/[...key]` for the
+  anonymous access that crawlers need.
+
+- **A durable record of the active storage topology.** The environment proposes;
+  the persisted snapshot decides. Editing a variable on an established site no
+  longer silently relocates it — the mismatch is reported instead.
+
+- **Local and S3 as installer choices.** `create-flowcms` asks, and generates
+  the matching `.env` and Compose overlay.
+
+### Changed
+
+- **The browser is no longer handed presigned S3 URLs.** Every image is served
+  by FlowCMS. This also fixes a latent bug on bundled-Garage deployments, where
+  every presigned thumbnail URL named `http://garage:3900` — a hostname only
+  resolvable inside the Docker network, and never from a browser.
+
+- **Object keys and public URLs are stable across a migration.** Nothing in the
+  database is rewritten, so a move changes where bytes live and nothing else.
+
+- **First-run setup was reworked.** "Site name" and "Tagline" are labelled Site
+  Title and Description, matching what they actually feed. The owner password
+  floor drops from twelve characters to six, matching every other admin account.
+  The System checks card is gone; it gated nothing, and `POST /api/setup`
+  re-checks prerequisites server-side regardless.
+
+  The installer now prints the setup token in full rather than naming the file
+  it lives in. That is a deliberate reversal of the rule `create-flowcms` was
+  written with: the token authorises one action once, the endpoint is gone
+  afterwards and the value is inert, and an operator who cannot find it is stuck
+  on the first screen they ever see. Terminal output only — no other generated
+  secret is ever printed.
+
+- **S3-compatible storage and bundled Garage are unchanged.** Garage remains
+  infrastructure, not a driver: the S3 driver cannot tell it apart from AWS,
+  R2, B2 or Wasabi, which is exactly what lets an operator move between them.
+
 ### Fixed
 
 - **The login CAPTCHA drew no security code, so nobody could sign in to the
@@ -36,6 +104,23 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the first-run prerequisites all correctly reported a healthy deployment. They
   ask whether a challenge can be *signed*; whether it can be *seen* is a
   different question.
+
+- **Every 404 on the public site crashed in development** with "Only plain
+  objects … can be passed to Client Components from Server Components".
+  `themeSettingsResolve` builds its settings bag with `Object.create(null)` on
+  purpose, so a stored key named `__proto__` can never reach `Object.prototype`
+  — and React's serializer refuses a null-prototype object outright. The copy
+  now happens at the two points where settings stop being internal state and
+  become component props, so resolution keeps its hardened object and only what
+  crosses into a component is plain.
+
+- **Two defects that would have made storage migration inoperable on three of
+  the four supported databases**, both found by running the engine on something
+  other than SQLite. Conditional writes counted affected rows as
+  `rowsAffected ?? rowCount` — libsql's shape and nobody else's — so on
+  PostgreSQL, MySQL and MariaDB every state transition read zero and threw. And
+  `upsert`'s injectable executor branched on the *ambient* dialect rather than
+  the executor's, handing a MySQL executor a builder method it does not have.
 
 ## [0.1.1] — 2026-08-27
 
@@ -175,6 +260,7 @@ API, database and object storage, and no external backend.
   [`docs/distribution/create-flowcms.md`](docs/distribution/create-flowcms.md).
 - No release automation is wired up yet; see `docs/ci.md` when it lands.
 
-[Unreleased]: https://github.com/flowcms-tech/flowcms/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/flowcms-tech/flowcms/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/flowcms-tech/flowcms/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/flowcms-tech/flowcms/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/flowcms-tech/flowcms/releases/tag/v0.1.0
