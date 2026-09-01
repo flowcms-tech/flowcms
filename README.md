@@ -6,7 +6,7 @@ and a theme system for everything the visitor sees.
 
 > **Status: early release.** FlowCMS is licensed **GPL-2.0-or-later** (see
 > [`LICENSE`](LICENSE)). `flowcms` and `create-flowcms` are published on npm at
-> **0.1.1**, cut from the `v0.1.1` tag. It is a 0.x project: the feature set is
+> **0.2.0**, cut from the `v0.2.0` tag. It is a 0.x project: the feature set is
 > complete and exercised, but the API and the theme contract may still move
 > between minor versions. See [Project status](#project-status).
 
@@ -323,7 +323,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) and
 ## Project status
 
 FlowCMS is released and installable. `flowcms` and `create-flowcms` are on npm
-at **0.1.1**, published from the `v0.1.1` tag through npm Trusted Publishing,
+at **0.2.0**, published from the `v0.2.0` tag through npm Trusted Publishing,
 with provenance attested to the workflow run that built them. Themes,
 multi-database support, Docker, first-run setup, the theme package and the
 `create-flowcms` scaffolder all exist and are exercised in CI on Linux, macOS
