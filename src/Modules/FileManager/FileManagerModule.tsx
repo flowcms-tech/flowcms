@@ -274,7 +274,7 @@ export default function FileManagerModule() {
     }
   }
 
-  async function uploadFiles(fileList: FileList) {
+  async function uploadFiles(fileList: FileList | File[]) {
     const incoming = Array.from(fileList)
     if (incoming.length === 0) return
 
@@ -324,10 +324,13 @@ export default function FileManagerModule() {
   }
 
   async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
-    const fileList = e.target.files
+    // `input.files` is a live FileList: resetting `value` empties it, so the
+    // selection must be copied out before the reset that allows re-picking the
+    // same file.
+    const selectedFiles = Array.from(e.target.files ?? [])
     if (inputRef.current) inputRef.current.value = ''
-    if (!fileList || fileList.length === 0) return
-    await uploadFiles(fileList)
+    if (selectedFiles.length === 0) return
+    await uploadFiles(selectedFiles)
   }
 
   function handleDragEnter(e: React.DragEvent<HTMLDivElement>) {
