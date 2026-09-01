@@ -17,6 +17,7 @@ import { FileManagerServices } from './Services/FileManagerServices'
 import { buildColumns } from './Values/FileManagerValues'
 import FileManagerNameModal from './Components/FileManagerNameModal'
 import FileManagerFilePropertiesModal from './Components/FileManagerFilePropertiesModal'
+import FileManagerConvertModal, { type ConvertFormat } from './Components/FileManagerConvertModal'
 import FileManagerSidebar from './Components/FileManagerSidebar'
 import FileManagerBreadcrumb from './Components/FileManagerBreadcrumb'
 import FileManagerUploadQueue, { type UploadQueueItem } from './Components/FileManagerUploadQueue'
@@ -104,6 +105,8 @@ export default function FileManagerBrowser({ selection }: FileManagerBrowserProp
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([])
   const [pendingUpload, setPendingUpload] = useState<PendingUpload | null>(null)
   const [filePropertiesTarget, setFilePropertiesTarget] = useState<FileManagerItem | null>(null)
+  const [fileConvertTarget, setFileConvertTarget] = useState<FileManagerItem | null>(null)
+  const [isFileConverting, setIsFileConverting] = useState(false)
   const [fileRenameTarget, setFileRenameTarget] = useState<FileManagerItem | null>(null)
   const [isFileRenaming, setIsFileRenaming] = useState(false)
   const [fileTransferAction, setFileTransferAction] = useState<FileTransferAction | null>(null)
@@ -135,6 +138,33 @@ export default function FileManagerBrowser({ selection }: FileManagerBrowserProp
     setFilePropertiesTarget(file)
   }
 
+  function handleRequestFileConvert(file: FileManagerItem) {
+    setFileConvertTarget(file)
+  }
+
+  async function handleConfirmFileConvert(input: {
+    format: ConvertFormat
+    name: string
+    destination: string
+  }) {
+    if (!fileConvertTarget) return
+    setIsFileConverting(true)
+    try {
+      await FileManagerServices.convertFile({ key: fileConvertTarget.id, ...input })
+      // Both folders, because the result can land somewhere other than the one
+      // being looked at.
+      await queryClient.invalidateQueries({ queryKey: ['file-manager-dir', selectedPrefix] })
+      await queryClient.invalidateQueries({ queryKey: ['file-manager-dir', input.destination] })
+      setFileConvertTarget(null)
+    } catch {
+      // Global error toast (via the axios interceptor) already surfaced this —
+      // and the route's refusals (name taken, would overwrite the source) come
+      // back through it as readable messages.
+    } finally {
+      setIsFileConverting(false)
+    }
+  }
+
   function handleRequestFileRename(file: FileManagerItem) {
     setFileRenameTarget(file)
   }
@@ -153,6 +183,7 @@ export default function FileManagerBrowser({ selection }: FileManagerBrowserProp
 
   const columns = buildColumns(
     handleRequestFileProperties,
+    handleRequestFileConvert,
     handleRequestFileRename,
     handleRequestFileMove,
     handleRequestFileCopy,
@@ -519,6 +550,7 @@ export default function FileManagerBrowser({ selection }: FileManagerBrowserProp
             headerContent={header}
             emptyContent={<p>No files found</p>}
             onProperties={handleRequestFileProperties}
+            onConvert={handleRequestFileConvert}
             onRename={handleRequestFileRename}
             onMove={handleRequestFileMove}
             onCopy={handleRequestFileCopy}
@@ -547,6 +579,15 @@ export default function FileManagerBrowser({ selection }: FileManagerBrowserProp
         <FileManagerFilePropertiesModal
           file={filePropertiesTarget}
           onClose={() => setFilePropertiesTarget(null)}
+        />
+      )}
+
+      {fileConvertTarget && (
+        <FileManagerConvertModal
+          file={fileConvertTarget}
+          isSubmitting={isFileConverting}
+          onSubmit={handleConfirmFileConvert}
+          onClose={() => setFileConvertTarget(null)}
         />
       )}
 

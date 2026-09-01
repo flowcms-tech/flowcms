@@ -342,6 +342,15 @@ export const ROUTE_POLICIES: Record<string, RoutePolicy> = {
     reason:
       "Renaming or deleting an object can break the image on any published post, so it stops at editor rather than contributor.",
   },
+  "file-manager/file/convert": {
+    default: "contributor",
+    reason:
+      "Sits with UPLOAD rather than with rename and delete, because it only ever writes a new " +
+      "object: it refuses to overwrite its source or any existing file, so it cannot break the " +
+      "image on a published post the way the routes below can. A contributor may already upload " +
+      "a converted image by hand through `file-manager`; doing it server-side changes nothing " +
+      "about who is trusted with what.",
+  },
   "file-manager/file/copy": {
     default: "editor",
     reason: "Bucket-wide object manipulation; same floor as the other destructive file routes.",

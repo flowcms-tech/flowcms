@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { mediaDownloadPath } from '@/Framework/Storage/mediaUrl'
+import { getFileCategory } from '@/Framework/Functions/FileValidation'
 import FileManagerFileIcon from './FileManagerFileIcon'
 import FileManagerFileActionsMenu from './FileManagerFileActionsMenu'
 import { formatBytes } from '../Values/FileManagerFormat'
@@ -15,6 +16,7 @@ interface FileManagerFileGridProps {
   emptyContent?: ReactNode
   headerContent?: ReactNode
   onProperties: (file: FileManagerItem) => void
+  onConvert: (file: FileManagerItem) => void
   onRename: (file: FileManagerItem) => void
   onMove: (file: FileManagerItem) => void
   onCopy: (file: FileManagerItem) => void
@@ -33,6 +35,7 @@ export default function FileManagerFileGrid({
   emptyContent,
   headerContent,
   onProperties,
+  onConvert,
   onRename,
   onMove,
   onCopy,
@@ -114,6 +117,9 @@ export default function FileManagerFileGrid({
                     <FileManagerFileActionsMenu
                       onProperties={() => onProperties(file)}
                       downloadHref={mediaDownloadPath(file.id)}
+                      onConvert={
+                        getFileCategory(file.name) === 'image' ? () => onConvert(file) : undefined
+                      }
                       onRename={() => onRename(file)}
                       onMove={() => onMove(file)}
                       onCopy={() => onCopy(file)}

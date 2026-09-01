@@ -1,6 +1,6 @@
 'use client'
 
-import { MoreVertical, Pencil, FolderInput, Copy, Download, Info, Trash2 } from 'lucide-react'
+import { MoreVertical, Pencil, FolderInput, Copy, Download, Info, Repeat, Trash2 } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -14,6 +14,8 @@ interface FileManagerFileActionsMenuProps {
   /** The media route's `download=1` URL — a real link, so the file can be saved
    *  with a middle click or the browser's own context menu like any other. */
   downloadHref: string
+  /** Omitted for anything that is not an image — there is nothing to convert. */
+  onConvert?: () => void
   onRename: () => void
   onMove: () => void
   onCopy: () => void
@@ -24,6 +26,7 @@ interface FileManagerFileActionsMenuProps {
 export default function FileManagerFileActionsMenu({
   onProperties,
   downloadHref,
+  onConvert,
   onRename,
   onMove,
   onCopy,
@@ -59,6 +62,15 @@ export default function FileManagerFileActionsMenu({
           </a>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
+        {onConvert && (
+          // Grouped with the actions that change the file even though it only
+          // ever adds one: it is the same kind of intent, and it is where
+          // someone looks for it.
+          <DropdownMenuItem onSelect={onConvert}>
+            <Repeat size={13} />
+            Convert
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onSelect={onRename}>
           <Pencil size={13} />
           Rename
