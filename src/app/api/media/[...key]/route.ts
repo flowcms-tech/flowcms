@@ -34,11 +34,16 @@ const CACHE_SECONDS = 60
  *
  * An allowlist rather than a lookup with a permissive fallback, because this
  * route returns attacker-influenced bytes from the same origin as the admin
- * panel. `text/html` or `image/svg+xml` served inline from here would be stored
- * XSS with a session attached. The upload allowlist already refuses `.html` and
- * `.svg`, but a bucket can hold keys that no upload created — an S3 bucket
+ * panel. `text/html` served inline from here would be stored XSS with a session
+ * attached, and a bucket can hold keys that no upload created — an S3 bucket
  * shared with another tool, or objects predating the allowlist — so this route
- * does not rely on that.
+ * does not rely on the upload allowlist to keep those out.
+ *
+ * `svg` IS ON THIS LIST AND IS THE ONE ENTRY THAT IS NOT INERT. It renders as a
+ * picture in an `<img>`, where no browser will run its scripts, but a URL opened
+ * directly is a top-level document where they do. It is served under
+ * `SVG_CSP` below, without which listing it here would be exactly the stored
+ * XSS this allowlist exists to prevent.
  */
 const INLINE_CONTENT_TYPES: Record<string, string> = {
   png: "image/png",
@@ -46,10 +51,23 @@ const INLINE_CONTENT_TYPES: Record<string, string> = {
   jpeg: "image/jpeg",
   gif: "image/gif",
   webp: "image/webp",
+  avif: "image/avif",
+  svg: "image/svg+xml",
   mp4: "video/mp4",
   webm: "video/webm",
   mov: "video/quicktime",
 }
+
+/**
+ * Strips an SVG of everything that makes it a program.
+ *
+ * `sandbox` (with no `allow-scripts`) drops the response into an opaque origin,
+ * and `default-src 'none'` refuses scripts and every outbound fetch. Inline
+ * styles stay allowed because ordinary illustrations rely on them. None of this
+ * affects an `<img>`, which already refused to run scripts — it closes the case
+ * where the file is opened as a page.
+ */
+const SVG_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
 
 /**
  * Rejects keys that are structurally wrong before they reach a driver.
@@ -123,6 +141,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       // A category header costs nothing and saves the File Manager from
       // re-deriving it from the extension on the client.
       "X-Flowcms-File-Category": getFileCategory(objectKey),
+      // Keyed on the extension, not the disposition: an SVG handed over as an
+      // attachment is still an SVG the browser may later be pointed at.
+      ...(extension === "svg" ? { "Content-Security-Policy": SVG_CSP } : {}),
     },
   })
 }

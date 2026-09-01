@@ -126,19 +126,40 @@ describe("serving bytes", () => {
 })
 
 describe("content types that must never render inline", () => {
-  it.each(["html", "svg", "xml", "js", "pdf", "txt", "unknown"])(
+  it.each(["html", "xml", "js", "pdf", "txt", "unknown"])(
     "hands over .%s as an attachment with a generic type",
     async (extension) => {
       const response = await GET(request(`/api/media/x.${extension}`), params(`x.${extension}`))
 
-      // Serving attacker-influenced bytes as text/html or image/svg+xml from the
-      // admin's own origin is stored XSS with a session attached. The upload
-      // allowlist refuses .html and .svg, but a bucket can hold keys no upload
-      // created — a shared bucket, or objects predating the allowlist.
+      // Serving attacker-influenced bytes as text/html from the admin's own
+      // origin is stored XSS with a session attached. The upload allowlist
+      // refuses .html, but a bucket can hold keys no upload created — a shared
+      // bucket, or objects predating the allowlist.
       expect(response.headers.get("Content-Type")).toBe("application/octet-stream")
       expect(response.headers.get("Content-Disposition")).toContain("attachment")
     },
   )
+
+  it("serves .svg inline, but strips its ability to execute", async () => {
+    // SVG MOVED OUT OF THE LIST ABOVE when it joined the upload allowlist, and
+    // the guarantee did not move with it — it is enforced differently now.
+    //
+    // Handing SVG over as an attachment made it unusable as a picture: a theme
+    // renders a logo with <img>, where a browser already refuses to run any
+    // script the file contains. What that disposition really protected against
+    // was someone opening the URL directly, where the file becomes a live
+    // document on the admin's origin. The CSP closes that case instead, so the
+    // format can be displayed without becoming executable.
+    const response = await GET(request("/api/media/x.svg"), params("x.svg"))
+
+    expect(response.headers.get("Content-Type")).toBe("image/svg+xml")
+    expect(response.headers.get("Content-Disposition")).toContain("inline")
+
+    const csp = response.headers.get("Content-Security-Policy") ?? ""
+    expect(csp).toContain("default-src 'none'")
+    expect(csp).toContain("sandbox")
+    expect(csp).not.toContain("allow-scripts")
+  })
 
   it("always sets nosniff, so a browser cannot decide the type itself", async () => {
     const response = await GET(request("/api/media/x.html"), params("x.html"))

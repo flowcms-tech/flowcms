@@ -1,4 +1,16 @@
-const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp']
+/**
+ * `svg` and `avif` joined this list deliberately, and they are not equivalent.
+ *
+ * AVIF is an ordinary raster format with no execution surface.
+ *
+ * SVG IS A DOCUMENT, NOT A PICTURE. It can carry `<script>`, event handlers and
+ * `<foreignObject>` full of HTML. Inside an `<img>` a browser refuses to run any
+ * of it, so themes are safe — but a URL opened directly is a top-level document
+ * where all of it runs. Both media routes therefore serve SVG under a CSP that
+ * removes scripting; adding the extension here without that would be stored XSS
+ * on the admin origin and on the public site.
+ */
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'svg']
 
 const VIDEO_EXTENSIONS = [
   'mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v',
