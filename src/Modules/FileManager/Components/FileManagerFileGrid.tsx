@@ -2,8 +2,11 @@
 
 import { useState, type ReactNode } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
+import { mediaDownloadPath, mediaPath } from '@/Framework/Storage/mediaUrl'
+import { getFileCategory } from '@/Framework/Functions/FileValidation'
 import FileManagerFileIcon from './FileManagerFileIcon'
 import FileManagerFileActionsMenu from './FileManagerFileActionsMenu'
+import { formatBytes } from '../Values/FileManagerFormat'
 import type { FileManagerItem } from '../Types'
 
 interface FileManagerFileGridProps {
@@ -12,17 +15,17 @@ interface FileManagerFileGridProps {
   loadingCount?: number
   emptyContent?: ReactNode
   headerContent?: ReactNode
+  onProperties: (file: FileManagerItem) => void
+  onConvert: (file: FileManagerItem) => void
   onRename: (file: FileManagerItem) => void
   onMove: (file: FileManagerItem) => void
   onCopy: (file: FileManagerItem) => void
   onDelete: (file: FileManagerItem) => void
   bulkActionContent?: (selected: FileManagerItem[], clearSelection: () => void) => ReactNode
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  /** Set only when the grid is being used to choose a file. */
+  onFileClick?: (file: FileManagerItem) => void
+  /** Present but not choosable — shown and still manageable, just dimmed. */
+  isFileDimmed?: (file: FileManagerItem) => boolean
 }
 
 export default function FileManagerFileGrid({
@@ -31,11 +34,15 @@ export default function FileManagerFileGrid({
   loadingCount = 12,
   emptyContent,
   headerContent,
+  onProperties,
+  onConvert,
   onRename,
   onMove,
   onCopy,
   onDelete,
   bulkActionContent,
+  onFileClick,
+  isFileDimmed,
 }: FileManagerFileGridProps) {
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
 
@@ -85,12 +92,14 @@ export default function FileManagerFileGrid({
           <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
             {files.map((file) => {
               const isSelected = selectedKeys.has(file.id)
+              const isDimmed = isFileDimmed?.(file) ?? false
               return (
                 <div
                   key={file.id}
+                  onClick={onFileClick && !isDimmed ? () => onFileClick(file) : undefined}
                   className={`group relative flex flex-col items-center gap-2 rounded-lg border p-3 text-center hover:bg-muted/50 ${
                     isSelected ? 'border-primary bg-primary/5' : 'border-transparent hover:border-border'
-                  }`}
+                  } ${onFileClick && !isDimmed ? 'cursor-pointer' : ''} ${isDimmed ? 'opacity-40' : ''}`}
                 >
                   <div
                     className={`absolute left-1 top-1 transition-opacity ${
@@ -106,6 +115,14 @@ export default function FileManagerFileGrid({
                   </div>
                   <div className="absolute right-1 top-1 pointer-events-none opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100">
                     <FileManagerFileActionsMenu
+                      previewHref={
+                        getFileCategory(file.name) === 'image' ? mediaPath(file.id) : undefined
+                      }
+                      onProperties={() => onProperties(file)}
+                      downloadHref={mediaDownloadPath(file.id)}
+                      onConvert={
+                        getFileCategory(file.name) === 'image' ? () => onConvert(file) : undefined
+                      }
                       onRename={() => onRename(file)}
                       onMove={() => onMove(file)}
                       onCopy={() => onCopy(file)}

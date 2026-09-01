@@ -172,7 +172,10 @@ export default function ElementInput({
                   // container and clearing the input below keeps it one.
                   "bg-transparent dark:bg-input/30",
                   errorVariant === "boxBelow" && error && "rounded-b-none",
-                  error ? "border-destructive" : "border-input",
+                  // The input inside is `border-0`, so its own `focus-visible`
+                  // border has nothing to paint: without this the addon variant
+                  // is the one field in the app that shows no focus at all.
+                  error ? "border-destructive" : "border-input focus-within:border-ring",
                   classNames.inputWrapper
                 )}>
                   {startContent && (

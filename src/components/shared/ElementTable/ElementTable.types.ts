@@ -45,6 +45,15 @@ export interface ElementTableProps<TData extends Record<string, unknown>> {
   onSelectionChange?: (rows: TData[]) => void
   bulkActionContent?: (rows: TData[], clearSelection: () => void) => ReactNode
 
+  /**
+   * Makes the whole row activatable. Clicks originating in the checkbox cell
+   * are excluded; anything else in a cell that must not trigger it (a menu
+   * trigger, a link) should stop propagation itself.
+   */
+  onRowClick?: (row: TData) => void
+  /** Extra classes per row — for dimming rows that are present but not choosable. */
+  rowClassName?: (row: TData) => ClassValue
+
   totalCount?: number
   pageSize?: number
 }

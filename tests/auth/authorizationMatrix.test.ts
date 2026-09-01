@@ -85,6 +85,12 @@ describe("contributor — the least-privileged role", () => {
     "captcha",
     "dashboard",
     "file-manager",
+    // Converting an image is an ADD, not an edit: the route refuses to write
+    // over its source or over any existing file, so it cannot break the image
+    // on a published post the way rename and delete can. A contributor could
+    // already upload a converted copy by hand through `file-manager`; doing the
+    // encoding server-side changes what is convenient, not who is trusted.
+    "file-manager/file/convert",
     // Reads the bytes of a stored object for a signed-in user. Same floor as
     // browsing the File Manager, because this is what renders the thumbnails a
     // contributor picks a featured image from. It replaced presigned URLs,
@@ -141,6 +147,9 @@ describe("contributor — the least-privileged role", () => {
   it("may upload media but never delete or move it", () => {
     expect(allows("file-manager", "GET", "contributor")).toBe(true)
     expect(allows("file-manager", "POST", "contributor")).toBe(true)
+    // Converting only ever writes a new object, so it sits with uploading
+    // rather than with the destructive routes below.
+    expect(allows("file-manager/file/convert", "POST", "contributor")).toBe(true)
     // Reading an object's bytes goes through /api/media, at the same floor.
     expect(allows("media/[...key]", "GET", "contributor")).toBe(true)
     // But an anonymous caller must NOT reach it. Anonymous image reads are

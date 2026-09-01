@@ -92,6 +92,21 @@ export const FileManagerServices = {
     )
   },
 
+  /** Writes a NEW object; the source is never modified or removed. */
+  async convertFile(input: {
+    key: string
+    format: 'png' | 'jpg' | 'webp' | 'avif'
+    name: string
+    destination: string
+  }): Promise<FileManagerItem> {
+    const res = await BAPI.post<ApiResponse<FileManagerItem>>(
+      '/api/file-manager/file/convert',
+      input,
+      { showGlobalError: true, showGlobalSuccess: false }
+    )
+    return res.data
+  },
+
   async deleteFile(key: string): Promise<void> {
     await BAPI.delete(
       '/api/file-manager/file',

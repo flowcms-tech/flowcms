@@ -1,16 +1,15 @@
 import type { ExtendedColumnDef } from '@/components/shared/ElementTable/ElementTable.types'
 import { parseDate } from '@/Framework/Functions/DateFunctions'
+import { mediaDownloadPath, mediaPath } from '@/Framework/Storage/mediaUrl'
+import { getFileCategory } from '@/Framework/Functions/FileValidation'
 import FileManagerFileIcon from '../Components/FileManagerFileIcon'
 import FileManagerFileActionsMenu from '../Components/FileManagerFileActionsMenu'
+import { formatBytes } from './FileManagerFormat'
 import type { FileManagerItem } from '../Types'
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
 export function buildColumns(
+  onProperties: (file: FileManagerItem) => void,
+  onConvert: (file: FileManagerItem) => void,
   onRename: (file: FileManagerItem) => void,
   onMove: (file: FileManagerItem) => void,
   onCopy: (file: FileManagerItem) => void,
@@ -56,6 +55,18 @@ export function buildColumns(
       cell: ({ row }) => (
         <div className="flex justify-end">
           <FileManagerFileActionsMenu
+            previewHref={
+              getFileCategory(row.original.name) === 'image'
+                ? mediaPath(row.original.id)
+                : undefined
+            }
+            onProperties={() => onProperties(row.original)}
+            downloadHref={mediaDownloadPath(row.original.id)}
+            onConvert={
+              getFileCategory(row.original.name) === 'image'
+                ? () => onConvert(row.original)
+                : undefined
+            }
             onRename={() => onRename(row.original)}
             onMove={() => onMove(row.original)}
             onCopy={() => onCopy(row.original)}

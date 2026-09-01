@@ -141,7 +141,6 @@ describe("nothing served to the admin origin can execute in it", () => {
 
   it.each([
     ["evil.html", "<script>alert(1)</script>"],
-    ["evil.svg", "<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"],
     ["evil.xhtml", "<html><body>x</body></html>"],
   ])("hands %s over as a download, never inline", async (name, contents) => {
     // These are not uploadable through the File Manager — the allowlist has no
@@ -153,7 +152,40 @@ describe("nothing served to the admin origin can execute in it", () => {
 
     expect(response.headers.get("Content-Disposition")).toMatch(/^attachment/)
     expect(response.headers.get("Content-Type")).toBe("application/octet-stream")
-    expect(response.headers.get("Content-Type")).not.toMatch(/html|svg/)
+    expect(response.headers.get("Content-Type")).not.toMatch(/html/)
+  })
+
+  it("serves a scripted SVG inline, but under a policy that cannot run it", async () => {
+    // SVG LEFT THE LIST ABOVE, THE GUARANTEE DID NOT. It became uploadable so
+    // that logos and icons can be stored and displayed, which an attachment
+    // disposition made impossible.
+    //
+    // The file below is the real attack: a picture carrying a script. In an
+    // <img> — the only way a theme renders one — no browser runs it. The case
+    // that mattered was a person opening the URL, where it becomes a document
+    // on the admin's own origin, and that is what this policy shuts down:
+    // `sandbox` without `allow-scripts` puts the response in an opaque origin,
+    // and `default-src 'none'` refuses every script and outbound fetch.
+    await StorageService.uploadObject(
+      "evil-inline.svg",
+      Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>")
+    )
+
+    const response = await media.GET(
+      request("/api/media/evil-inline.svg"),
+      params(["evil-inline.svg"])
+    )
+
+    expect(response.headers.get("Content-Type")).toBe("image/svg+xml")
+
+    const csp = response.headers.get("Content-Security-Policy") ?? ""
+    expect(csp, "an SVG served without a CSP is stored XSS on the admin origin").toContain(
+      "default-src 'none'"
+    )
+    expect(csp).toContain("sandbox")
+    expect(csp).not.toContain("allow-scripts")
+    // nosniff still matters: it stops a browser second-guessing the type.
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff")
   })
 
   it("serves a real image inline, because that is the point of the route", async () => {
@@ -188,6 +220,36 @@ describe("public images are gated on a real reference", () => {
 
     expect(response.status).toBe(200)
     expect(await response.text()).toBe("pixels")
+  })
+
+  it("serves a referenced SVG under a policy that cannot run it", async () => {
+    // The same guarantee as on the admin route, and it matters MORE here: this
+    // response is anonymous and comes from the site's own origin, so an SVG
+    // able to run scripts would be stored XSS against every visitor rather than
+    // against one signed-in admin.
+    //
+    // Reaching this point already required a published post or page to
+    // reference the file — an attacker cannot serve an arbitrary SVG from here
+    // — but a referenced image is exactly what a contributor can control.
+    await StorageService.uploadObject(
+      "2026/08/logo.svg",
+      Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>")
+    )
+
+    const response = await publicImages.GET(
+      request("/api/public/images/2026/08/logo.svg"),
+      params(["2026", "08", "logo.svg"]),
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("Content-Type")).toBe("image/svg+xml")
+
+    const csp = response.headers.get("Content-Security-Policy") ?? ""
+    expect(csp, "an anonymous SVG without a CSP is stored XSS on the public site").toContain(
+      "default-src 'none'"
+    )
+    expect(csp).toContain("sandbox")
+    expect(csp).not.toContain("allow-scripts")
   })
 
   it("REFUSES an image nothing published refers to, without reading it", async () => {

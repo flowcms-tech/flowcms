@@ -28,6 +28,11 @@ const CONTENT_TYPES: Record<string, string> = {
   jpeg: "image/jpeg",
   gif: "image/gif",
   webp: "image/webp",
+  avif: "image/avif",
+  // Served, but never as a program. See SVG_CSP below — this response is
+  // ANONYMOUS, so an SVG that could run scripts here would be stored XSS
+  // against every visitor to the site rather than against one admin.
+  svg: "image/svg+xml",
 }
 
 function isSafeKey(key: string): boolean {
@@ -58,9 +63,18 @@ export async function GET(
     return notFound()
   }
 
+  const extension = getFileExtension(objectKey)
+
   return new NextResponse(new Uint8Array(body), {
     headers: {
-      "Content-Type": CONTENT_TYPES[getFileExtension(objectKey)] ?? "application/octet-stream",
+      "Content-Type": CONTENT_TYPES[extension] ?? "application/octet-stream",
+      // An SVG in an `<img>` — which is the only way a theme renders one —
+      // already cannot execute. This covers the visitor who follows the URL
+      // directly, where the same file would otherwise be a live document on
+      // this site's own origin.
+      ...(extension === "svg"
+        ? { "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox" }
+        : {}),
       // DEFENCE IN DEPTH, matching the private media route.
       //
       // Two checks above already make the fallback branch unreachable: the key

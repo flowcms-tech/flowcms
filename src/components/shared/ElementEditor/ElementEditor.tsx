@@ -8,8 +8,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { cn } from '@/lib/utils'
 import type { ClassValue } from 'clsx'
 import ElementLabelHint from '@/components/shared/ElementLabelHint/ElementLabelHint'
-import ElementFileSelectorModal from '@/components/shared/ElementFileSelector/ElementFileSelectorModal'
-import type { FileSelectorItem } from '@/components/shared/ElementFileSelector/ElementFileSelector.api'
+import FileManagerPickerModal from '@/Modules/FileManager/FileManagerPickerModal'
 import { FileManagerServices } from '@/Modules/FileManager/Services/FileManagerServices'
 import { publicImagePath } from '@/Framework/Storage/publicImageUrl'
 import ElementToast from '@/components/shared/ElementToast/ElementToast'
@@ -272,25 +271,28 @@ function Core({
         />
       </div>
 
-      <ElementFileSelectorModal
+      <FileManagerPickerModal
         isOpen={isImagePickerOpen}
         onClose={() => setIsImagePickerOpen(false)}
-        multiple={false}
+        title="Insert Image"
         accept="image"
-        onSelectSingle={(item: FileSelectorItem) => {
+        onConfirm={(keys) => {
+          const key = keys[0]
           const editor = editorRef.current
-          if (editor) {
-            // Public route, not `item.thumbnailUrl` — see uploadPastedImages.
-            // An admin-only /api/media URL persisted into the body 404s for
-            // every anonymous visitor.
+          if (key && editor) {
+            // Public route, not the admin `/api/media` one — see
+            // uploadPastedImages. A URL persisted into the body has to resolve
+            // for anonymous visitors, and the admin route 404s for them.
             editor.insertContent(
-              editor.dom.createHTML('img', { src: publicImagePath(item.id), alt: item.name })
+              editor.dom.createHTML('img', {
+                src: publicImagePath(key),
+                alt: key.slice(key.lastIndexOf('/') + 1),
+              })
             )
             editor.focus()
           }
           setIsImagePickerOpen(false)
         }}
-        onSelectMultiple={() => {}}
       />
 
       <AnimatePresence initial={false}>
