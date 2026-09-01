@@ -7,10 +7,11 @@ import ElementTable from '@/components/shared/ElementTable/ElementTable'
 import ElementButton from '@/components/shared/ElementButton/ElementButton'
 import ElementToast from '@/components/shared/ElementToast/ElementToast'
 import ElementModal from '@/components/shared/ElementModal/ElementModal'
-import { Input } from '@/components/ui/input'
 import { isAllowedFileType, ALLOWED_FILE_ACCEPT_ATTRIBUTE } from '@/Framework/Functions/FileValidation'
 import { FileManagerServices } from './Services/FileManagerServices'
 import { buildColumns } from './Values/FileManagerValues'
+import FileManagerNameModal from './Components/FileManagerNameModal'
+import FileManagerFilePropertiesModal from './Components/FileManagerFilePropertiesModal'
 import FileManagerSidebar from './Components/FileManagerSidebar'
 import FileManagerBreadcrumb from './Components/FileManagerBreadcrumb'
 import FileManagerUploadQueue, { type UploadQueueItem } from './Components/FileManagerUploadQueue'
@@ -42,6 +43,20 @@ interface BulkDeleteAction {
   clearSelection: () => void
 }
 
+/**
+ * Splits a file name into the part that may be renamed and the extension that
+ * may not: `["Rufus.4.13.2316.Portable", ".zip"]`.
+ *
+ * A leading dot is a whole name, not an extension, and a trailing dot is not one
+ * either — both cases hand back the name with an empty extension, which leaves
+ * the field fully editable rather than locking a suffix that means nothing.
+ */
+function splitFileName(name: string): [stem: string, extension: string] {
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0 || dot === name.length - 1) return [name, '']
+  return [name.slice(0, dot), name.slice(dot)]
+}
+
 export default function FileManagerModule() {
   const queryClient = useQueryClient()
   const inputRef = useRef<HTMLInputElement>(null)
@@ -52,8 +67,8 @@ export default function FileManagerModule() {
   const [viewMode, setViewMode] = useState<ViewMode>('list')
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([])
   const [pendingUpload, setPendingUpload] = useState<PendingUpload | null>(null)
+  const [filePropertiesTarget, setFilePropertiesTarget] = useState<FileManagerItem | null>(null)
   const [fileRenameTarget, setFileRenameTarget] = useState<FileManagerItem | null>(null)
-  const [fileRenameValue, setFileRenameValue] = useState('')
   const [isFileRenaming, setIsFileRenaming] = useState(false)
   const [fileTransferAction, setFileTransferAction] = useState<FileTransferAction | null>(null)
   const [isFileTransferring, setIsFileTransferring] = useState(false)
@@ -76,9 +91,16 @@ export default function FileManagerModule() {
 
   const files = data?.files ?? []
 
+  const [renameStem, renameExtension] = fileRenameTarget
+    ? splitFileName(fileRenameTarget.name)
+    : ['', '']
+
+  function handleRequestFileProperties(file: FileManagerItem) {
+    setFilePropertiesTarget(file)
+  }
+
   function handleRequestFileRename(file: FileManagerItem) {
     setFileRenameTarget(file)
-    setFileRenameValue(file.name)
   }
 
   function handleRequestFileMove(file: FileManagerItem) {
@@ -93,21 +115,21 @@ export default function FileManagerModule() {
     setFileDeleteTarget(file)
   }
 
-  const columns = buildColumns(handleRequestFileRename, handleRequestFileMove, handleRequestFileCopy, handleRequestFileDelete)
+  const columns = buildColumns(
+    handleRequestFileProperties,
+    handleRequestFileRename,
+    handleRequestFileMove,
+    handleRequestFileCopy,
+    handleRequestFileDelete,
+  )
 
-  async function handleConfirmFileRename() {
+  async function handleConfirmFileRename(name: string) {
     if (!fileRenameTarget) return
-    const trimmed = fileRenameValue.trim()
-    if (!isAllowedFileType(trimmed)) {
-      ElementToast.error('This file type is not allowed.')
-      return
-    }
     setIsFileRenaming(true)
     try {
-      await FileManagerServices.renameFile(fileRenameTarget.id, trimmed)
+      await FileManagerServices.renameFile(fileRenameTarget.id, name)
       await queryClient.invalidateQueries({ queryKey: ['file-manager-dir', selectedPrefix] })
       setFileRenameTarget(null)
-      setFileRenameValue('')
     } catch {
       // Global error toast (via the axios interceptor) already surfaced this.
     } finally {
@@ -363,7 +385,10 @@ export default function FileManagerModule() {
     <div className="flex items-center justify-between gap-3">
       <FileManagerBreadcrumb prefix={selectedPrefix} onNavigate={setSelectedPrefix} />
       <div className="flex items-center gap-2">
-        <div className="flex items-center rounded-lg border border-border p-0.5">
+        {/* h-8 to match the Upload button beside it. `p-px` is what makes the
+            arithmetic exact: 32px, less 1px of border and 1px of padding on
+            each edge, leaves precisely the 28px the two toggles occupy. */}
+        <div className="flex h-8 items-center rounded-lg border border-border p-px">
           <button
             type="button"
             onClick={() => setViewMode('list')}
@@ -385,7 +410,10 @@ export default function FileManagerModule() {
             <LayoutGrid size={15} />
           </button>
         </div>
-        <ElementButton size="sm" onClick={() => inputRef.current?.click()}>
+        {/* `sm` for its smaller label, raised to the 32px the view toggle beside
+            it stands at. `cn` is tailwind-merge, so this h-8 beats the variant's
+            h-7 rather than fighting it. */}
+        <ElementButton size="sm" className="h-8" onClick={() => inputRef.current?.click()}>
           <Upload size={15} />
           Upload File
         </ElementButton>
@@ -429,6 +457,7 @@ export default function FileManagerModule() {
             loading={isLoading}
             headerContent={header}
             emptyContent={<p>No files found</p>}
+            onProperties={handleRequestFileProperties}
             onRename={handleRequestFileRename}
             onMove={handleRequestFileMove}
             onCopy={handleRequestFileCopy}
@@ -451,24 +480,27 @@ export default function FileManagerModule() {
         onCancel={handleCancelUpload}
       />
 
-      <ElementModal.Confirm
-        isOpen={fileRenameTarget !== null}
-        onClose={(open) => { if (!open) { setFileRenameTarget(null); setFileRenameValue('') } }}
-        variant="default"
-        title="Rename File"
-        description={fileRenameTarget ? `Rename "${fileRenameTarget.name}".` : undefined}
-        confirmText="Rename"
-        isLoading={isFileRenaming}
-        disabledConfirm={!fileRenameValue.trim()}
-        onConfirm={handleConfirmFileRename}
-      >
-        <Input
-          value={fileRenameValue}
-          onChange={(e) => setFileRenameValue(e.target.value)}
-          placeholder="File name"
-          autoFocus
+      {filePropertiesTarget && (
+        <FileManagerFilePropertiesModal
+          file={filePropertiesTarget}
+          onClose={() => setFilePropertiesTarget(null)}
         />
-      </ElementModal.Confirm>
+      )}
+
+      {fileRenameTarget && (
+        <FileManagerNameModal
+          title="Rename File"
+          description={`Rename "${fileRenameTarget.name}".`}
+          label="File name"
+          placeholder="File name"
+          defaultValue={renameStem}
+          suffix={renameExtension}
+          confirmText="Rename"
+          isSubmitting={isFileRenaming}
+          onSubmit={handleConfirmFileRename}
+          onClose={() => setFileRenameTarget(null)}
+        />
+      )}
 
       <FileManagerDirectoryPicker
         isOpen={fileTransferAction !== null}

@@ -2,8 +2,10 @@
 
 import { useState, type ReactNode } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
+import { mediaDownloadPath } from '@/Framework/Storage/mediaUrl'
 import FileManagerFileIcon from './FileManagerFileIcon'
 import FileManagerFileActionsMenu from './FileManagerFileActionsMenu'
+import { formatBytes } from '../Values/FileManagerFormat'
 import type { FileManagerItem } from '../Types'
 
 interface FileManagerFileGridProps {
@@ -12,17 +14,12 @@ interface FileManagerFileGridProps {
   loadingCount?: number
   emptyContent?: ReactNode
   headerContent?: ReactNode
+  onProperties: (file: FileManagerItem) => void
   onRename: (file: FileManagerItem) => void
   onMove: (file: FileManagerItem) => void
   onCopy: (file: FileManagerItem) => void
   onDelete: (file: FileManagerItem) => void
   bulkActionContent?: (selected: FileManagerItem[], clearSelection: () => void) => ReactNode
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 export default function FileManagerFileGrid({
@@ -31,6 +28,7 @@ export default function FileManagerFileGrid({
   loadingCount = 12,
   emptyContent,
   headerContent,
+  onProperties,
   onRename,
   onMove,
   onCopy,
@@ -106,6 +104,8 @@ export default function FileManagerFileGrid({
                   </div>
                   <div className="absolute right-1 top-1 pointer-events-none opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100">
                     <FileManagerFileActionsMenu
+                      onProperties={() => onProperties(file)}
+                      downloadHref={mediaDownloadPath(file.id)}
                       onRename={() => onRename(file)}
                       onMove={() => onMove(file)}
                       onCopy={() => onCopy(file)}

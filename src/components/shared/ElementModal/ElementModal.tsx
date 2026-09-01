@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 import {
   Dialog,
   DialogClose,
+  DialogCloseButton,
   DialogContent,
   DialogTitle,
   DialogTrigger,
@@ -67,6 +68,12 @@ export interface ElementModalProps {
   footer?:       React.ReactNode
   /** Allow closing by clicking the backdrop. Default: false */
   closeOnOutsideClick?: boolean
+  /**
+   * Radix focuses the first tabbable element on open, which here is the close
+   * button. Prevent the event and focus something else to put the caret where
+   * the dialog actually wants it — a form dialog's first field, say.
+   */
+  onOpenAutoFocus?: (event: Event) => void
   classNames?:   ElementModalClassNames
 }
 
@@ -104,6 +111,7 @@ function ElementModalRoot({
   showHeader = true,
   footer,
   closeOnOutsideClick = false,
+  onOpenAutoFocus,
   classNames,
 }: ElementModalProps) {
   return (
@@ -113,18 +121,19 @@ function ElementModalRoot({
       <DialogContent
         aria-describedby={undefined}
         onInteractOutside={(e) => { if (!closeOnOutsideClick) e.preventDefault() }}
+        onOpenAutoFocus={onOpenAutoFocus}
         className={cn(
           "p-0 gap-0 flex flex-col overflow-hidden max-h-[90vh]",
           modalSizeVariants({ size }),
           classNames?.content
         )}
       >
-        {/* Close button — left side in RTL */}
+        {/* Close button — trailing corner, opposite the title */}
         <DialogClose asChild>
           <button
             aria-label="Close"
             className={cn(
-              "cursor-pointer absolute left-4 top-[22px] z-10 rounded-md p-0.5 opacity-80 transition-opacity hover:opacity-100",
+              "cursor-pointer absolute end-4 top-[22px] z-10 rounded-md p-0.5 opacity-80 transition-opacity hover:opacity-100",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-foreground/50",
               showHeader ? "text-primary-foreground" : "text-foreground",
               classNames?.closeButton
@@ -134,12 +143,12 @@ function ElementModalRoot({
           </button>
         </DialogClose>
 
-        {/* Header — title starts from right in RTL */}
+        {/* Header — title on the leading edge, padded clear of the close button */}
         {showHeader && (
           <DialogTitle
             className={cn(
               modalHeaderVariants({ variant }),
-              "pl-10",
+              "pe-10",
               classNames?.header
             )}
           >
@@ -259,15 +268,20 @@ function ModalConfirm({
           >
             {icon ?? iconStyle.icon}
           </div>
-          <div className="flex flex-col gap-1.5 pt-0.5">
+          {/*
+            The end padding is on the text, not the column: it clears the close
+            button in the corner, and children (a textarea, a validation box)
+            should still run the full width.
+          */}
+          <div className="flex min-w-0 flex-col gap-1.5 pt-0.5">
             <DialogTitle
-              className={cn("text-base font-semibold text-foreground", classNames?.title)}
+              className={cn("pe-8 text-base font-semibold text-foreground", classNames?.title)}
             >
               {title}
             </DialogTitle>
             {description && (
               <DialogPrimitive.Description
-                className={cn("text-sm text-muted-foreground", classNames?.description)}
+                className={cn("pe-8 text-sm text-muted-foreground", classNames?.description)}
               >
                 {description}
               </DialogPrimitive.Description>
@@ -298,6 +312,17 @@ function ModalConfirm({
             {confirmText}
           </ElementButton>
         </div>
+
+        {/*
+          Last in the DOM on purpose. It is positioned absolutely, so order does
+          not move it — but order does decide what Radix focuses on open, and a
+          dialog carrying a field should open with the caret in the field rather
+          than on its own dismiss button.
+        */}
+        <DialogCloseButton
+          disabled={isLoading || busy}
+          className="text-muted-foreground hover:text-foreground"
+        />
       </DialogContent>
     </Dialog>
   )
@@ -365,9 +390,9 @@ function ModalWarning({
             >
               <AlertTriangle size={20} className={iconColor} />
             </div>
-            <div className="flex-1">
+            <div className="min-w-0 flex-1">
               <DialogTitle
-                className={cn("text-base font-semibold text-foreground mb-2", classNames?.title)}
+                className={cn("pe-8 text-base font-semibold text-foreground mb-2", classNames?.title)}
               >
                 {title}
               </DialogTitle>
@@ -382,6 +407,8 @@ function ModalWarning({
             {closeText}
           </ElementButton>
         </div>
+
+        <DialogCloseButton className="text-muted-foreground hover:text-foreground" />
       </DialogContent>
     </Dialog>
   )

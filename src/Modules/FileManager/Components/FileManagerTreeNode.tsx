@@ -44,32 +44,49 @@ export default function FileManagerTreeNode({
   const [isExpanded, setIsExpanded] = useState(defaultExpanded)
   const isSelected = selectedPrefix === prefix
 
-  const { data } = useQuery({
+  // Deliberately NOT gated on `isExpanded`. A folder cannot be known to be
+  // empty until something lists it, and an expander that opens onto nothing is
+  // a promise the row cannot keep — so every visible row buys that answer, at
+  // the price of one listing per rendered node. It also makes expanding
+  // instant, since the children are already cached by the time they are asked
+  // for.
+  const { data, isPending } = useQuery({
     queryKey: ['file-manager-dir', prefix],
     queryFn: () => FileManagerServices.listDirectory(prefix),
-    enabled: isExpanded,
   })
 
   const childDirectories = data?.directories ?? []
+  // Unknown counts as expandable: the control may then disappear for an empty
+  // folder, but it never appears late on one that turned out to have children.
+  const canExpand = isPending || childDirectories.length > 0
   const showRowActions = showActions && prefix !== ''
 
   return (
     <div>
+      {/* The row carries its own bottom margin because the tree is recursive:
+          only the row sits next to every other row, so a gap on any one
+          container would miss the seams between depths. */}
       <div
-        className={`group flex items-center gap-1 rounded-md py-1.5 pe-1 text-sm cursor-pointer hover:bg-muted ${isSelected ? 'bg-muted font-medium' : ''}`}
+        className={`group mb-0.5 flex items-center gap-1 rounded-md py-1.5 pe-1 text-sm cursor-pointer hover:bg-muted ${isSelected ? 'bg-muted font-medium' : ''}`}
         style={{ paddingInlineStart: `${depth * 16 + 8}px` }}
         onClick={() => { onSelect(prefix); setIsExpanded(true) }}
       >
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            setIsExpanded((prev) => !prev)
-          }}
-          className="flex size-4 shrink-0 items-center justify-center text-muted-foreground"
-        >
-          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        </button>
+        {canExpand ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              setIsExpanded((prev) => !prev)
+            }}
+            className="flex size-4 shrink-0 items-center justify-center text-muted-foreground"
+          >
+            {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </button>
+        ) : (
+          // Holds the column open so a childless folder's own icon and name
+          // stay in line with its siblings' rather than sliding left.
+          <span className="size-4 shrink-0" aria-hidden />
+        )}
         {icon ?? <Folder size={14} className="shrink-0 text-muted-foreground" />}
         <span className="flex-1 truncate">{name}</span>
         {showRowActions && (

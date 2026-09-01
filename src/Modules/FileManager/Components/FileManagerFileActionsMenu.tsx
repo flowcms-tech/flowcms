@@ -1,6 +1,6 @@
 'use client'
 
-import { MoreVertical, Pencil, FolderInput, Copy, Trash2 } from 'lucide-react'
+import { MoreVertical, Pencil, FolderInput, Copy, Download, Info, Trash2 } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -10,6 +10,10 @@ import {
 } from '@/components/ui/dropdown-menu'
 
 interface FileManagerFileActionsMenuProps {
+  onProperties: () => void
+  /** The media route's `download=1` URL — a real link, so the file can be saved
+   *  with a middle click or the browser's own context menu like any other. */
+  downloadHref: string
   onRename: () => void
   onMove: () => void
   onCopy: () => void
@@ -18,6 +22,8 @@ interface FileManagerFileActionsMenuProps {
 }
 
 export default function FileManagerFileActionsMenu({
+  onProperties,
+  downloadHref,
   onRename,
   onMove,
   onCopy,
@@ -39,6 +45,20 @@ export default function FileManagerFileActionsMenu({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+        {/* Grouped by what they do to the file: read, then change, then destroy. */}
+        <DropdownMenuItem onSelect={onProperties}>
+          <Info size={13} />
+          Properties
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          {/* `download` also keeps the app-wide progress bar out of it: the
+              provider reads a plain anchor click as a route change. */}
+          <a href={downloadHref} download>
+            <Download size={13} />
+            Download
+          </a>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={onRename}>
           <Pencil size={13} />
           Rename

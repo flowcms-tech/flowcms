@@ -4,8 +4,8 @@ import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { FolderPlus, Home } from 'lucide-react'
 import ElementModal from '@/components/shared/ElementModal/ElementModal'
-import { Input } from '@/components/ui/input'
 import { FileManagerServices } from '../Services/FileManagerServices'
+import FileManagerNameModal from './FileManagerNameModal'
 import FileManagerTreeNode from './FileManagerTreeNode'
 import FileManagerDirectoryPicker from './FileManagerDirectoryPicker'
 
@@ -18,11 +18,11 @@ export default function FileManagerSidebar({ selectedPrefix, onSelect }: FileMan
   const queryClient = useQueryClient()
 
   const [isCreateOpen, setIsCreateOpen] = useState(false)
-  const [newDirName, setNewDirName] = useState('')
   const [isCreating, setIsCreating] = useState(false)
 
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState('')
+  // The target is a prefix; this is the bare name the dialog opens with.
+  const [renameInitialName, setRenameInitialName] = useState('')
   const [isRenaming, setIsRenaming] = useState(false)
 
   const [transferAction, setTransferAction] = useState<{ type: 'move' | 'copy'; prefix: string } | null>(null)
@@ -37,12 +37,11 @@ export default function FileManagerSidebar({ selectedPrefix, onSelect }: FileMan
     return parentSegments.length > 0 ? `${parentSegments.join('/')}/` : ''
   }
 
-  async function handleCreateDirectory() {
+  async function handleCreateDirectory(name: string) {
     setIsCreating(true)
     try {
-      await FileManagerServices.createDirectory(selectedPrefix, newDirName.trim())
+      await FileManagerServices.createDirectory(selectedPrefix, name)
       await queryClient.invalidateQueries({ queryKey: ['file-manager-dir', selectedPrefix] })
-      setNewDirName('')
       setIsCreateOpen(false)
     } catch {
       // Global error toast (via the axios interceptor) already surfaced this.
@@ -53,18 +52,17 @@ export default function FileManagerSidebar({ selectedPrefix, onSelect }: FileMan
 
   function handleRequestRename(prefix: string, currentName: string) {
     setRenameTarget(prefix)
-    setRenameValue(currentName)
+    setRenameInitialName(currentName)
   }
 
-  async function handleConfirmRename() {
+  async function handleConfirmRename(name: string) {
     if (!renameTarget) return
     setIsRenaming(true)
     try {
-      const trimmed = renameValue.trim()
       const parent = parentOf(renameTarget)
-      const newPrefix = `${parent}${trimmed}/`
+      const newPrefix = `${parent}${name}/`
 
-      await FileManagerServices.renameDirectory(renameTarget, trimmed)
+      await FileManagerServices.renameDirectory(renameTarget, name)
       await queryClient.invalidateQueries({ queryKey: ['file-manager-dir', parent] })
 
       if (selectedPrefix === renameTarget || selectedPrefix.startsWith(renameTarget)) {
@@ -72,7 +70,6 @@ export default function FileManagerSidebar({ selectedPrefix, onSelect }: FileMan
       }
 
       setRenameTarget(null)
-      setRenameValue('')
     } catch {
       // Global error toast (via the axios interceptor) already surfaced this.
     } finally {
@@ -159,43 +156,32 @@ export default function FileManagerSidebar({ selectedPrefix, onSelect }: FileMan
         />
       </div>
 
-      <ElementModal.Confirm
-        isOpen={isCreateOpen}
-        onClose={(open) => { if (!open) { setIsCreateOpen(false); setNewDirName('') } }}
-        variant="default"
-        title="New Directory"
-        description={`Create a new directory inside "${selectedPrefix || 'Home'}".`}
-        confirmText="Create"
-        isLoading={isCreating}
-        disabledConfirm={!newDirName.trim()}
-        onConfirm={handleCreateDirectory}
-      >
-        <Input
-          value={newDirName}
-          onChange={(e) => setNewDirName(e.target.value)}
+      {isCreateOpen && (
+        <FileManagerNameModal
+          title="New Directory"
+          description={`Create a new directory inside "${selectedPrefix || 'Home'}".`}
+          label="Directory name"
           placeholder="Directory name"
-          autoFocus
+          confirmText="Create"
+          isSubmitting={isCreating}
+          onSubmit={handleCreateDirectory}
+          onClose={() => setIsCreateOpen(false)}
         />
-      </ElementModal.Confirm>
+      )}
 
-      <ElementModal.Confirm
-        isOpen={renameTarget !== null}
-        onClose={(open) => { if (!open) { setRenameTarget(null); setRenameValue('') } }}
-        variant="default"
-        title="Rename Directory"
-        description={renameTarget ? `Rename "${renameTarget}".` : undefined}
-        confirmText="Rename"
-        isLoading={isRenaming}
-        disabledConfirm={!renameValue.trim()}
-        onConfirm={handleConfirmRename}
-      >
-        <Input
-          value={renameValue}
-          onChange={(e) => setRenameValue(e.target.value)}
+      {renameTarget !== null && (
+        <FileManagerNameModal
+          title="Rename Directory"
+          description={`Rename "${renameTarget}".`}
+          label="Directory name"
           placeholder="Directory name"
-          autoFocus
+          defaultValue={renameInitialName}
+          confirmText="Rename"
+          isSubmitting={isRenaming}
+          onSubmit={handleConfirmRename}
+          onClose={() => setRenameTarget(null)}
         />
-      </ElementModal.Confirm>
+      )}
 
       <FileManagerDirectoryPicker
         isOpen={transferAction !== null}
