@@ -15,9 +15,9 @@ package stops compiling and `tests/themes/publicContract.test.ts` fails.
 > ```
 >
 > It is built from `src/Themes/contract` into `packages/flowcms`, and the
-> current release is **0.1.1**. Declare a `flowcmsCompat` range your theme
+> current release is **0.2.0**. Declare a `flowcmsCompat` range your theme
 > actually renders against — FlowCMS is 0.x, where a minor bump is a breaking
-> change by convention, so `^0.1.0` accepts `0.1.1` but not `0.2.0`.
+> change by convention, so `^0.2.0` accepts `0.2.1` but not `0.3.0`.
 >
 > `@example/flowcms-theme-aurora` is **not** published: it is a fixture in this
 > repository, and the samples use it as a stand-in for your own package name.
@@ -90,7 +90,7 @@ my-theme/
   "main": "./src/index.ts",
   "exports": { ".": "./src/index.ts" },
   "peerDependencies": {
-    "flowcms": ">=0.1.0 <0.2.0",
+    "flowcms": ">=0.2.0 <0.3.0",
     "react": "^19.0.0"
   },
   "flowcms": { "type": "theme", "slug": "aurora", "entry": "./src/index.ts" },
@@ -175,7 +175,7 @@ export const manifest: ThemeManifest = {
   slug: "aurora",
   name: "Aurora",
   version: "1.2.0",
-  flowcmsCompat: "^0.1.0",
+  flowcmsCompat: "^0.2.0",
   menuSlots: ["primary", "sidebar"],
   description: "A package-shaped example theme.",
   author: "Example Themes",
@@ -196,7 +196,7 @@ Authors conflate these constantly:
 | Number | Where | Means |
 |---|---|---|
 | `1.2.0` | `package.json#version` | your package release |
-| `^0.1.0` | `manifest.flowcmsCompat` | which FlowCMS versions you render against |
+| `^0.2.0` | `manifest.flowcmsCompat` | which FlowCMS versions you render against |
 | `2` | `settings.version` | the shape of your persisted settings |
 
 `flowcmsCompat` is evaluated against the runtime `FLOWCMS_VERSION` constant. If

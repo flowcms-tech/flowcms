@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { validateManifest, validateTheme } from "@/Themes/validation/manifest"
 import type { ThemeManifest } from "@/Themes/contract/views"
+import { FLOWCMS_VERSION } from "@/Framework/Config/version"
 
 /**
  * Manifest validation is the gate every theme passes through before core will
@@ -12,7 +13,13 @@ const VALID: ThemeManifest = {
   slug: "sunrise",
   name: "Sunrise",
   version: "1.2.3",
-  flowcmsCompat: "^0.1.0",
+  // DERIVED, because this fixture's job is to be the manifest that PASSES.
+  // Pinned to `^0.1.0`, it stopped being one the moment FLOWCMS_VERSION reached
+  // 0.2.0 — a caret range excludes the next minor below 1.0 — and the tests
+  // that assert a valid theme is accepted started failing for a reason that had
+  // nothing to do with what they check. Cases that exercise the range logic
+  // itself override this and pass an explicit version, so they stay pinned.
+  flowcmsCompat: `^${FLOWCMS_VERSION}`,
   menuSlots: ["primary", "footer"],
 }
 
