@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
-import { mediaDownloadPath } from '@/Framework/Storage/mediaUrl'
+import { mediaDownloadPath, mediaPath } from '@/Framework/Storage/mediaUrl'
 import { getFileCategory } from '@/Framework/Functions/FileValidation'
 import FileManagerFileIcon from './FileManagerFileIcon'
 import FileManagerFileActionsMenu from './FileManagerFileActionsMenu'
@@ -115,6 +115,9 @@ export default function FileManagerFileGrid({
                   </div>
                   <div className="absolute right-1 top-1 pointer-events-none opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100">
                     <FileManagerFileActionsMenu
+                      previewHref={
+                        getFileCategory(file.name) === 'image' ? mediaPath(file.id) : undefined
+                      }
                       onProperties={() => onProperties(file)}
                       downloadHref={mediaDownloadPath(file.id)}
                       onConvert={

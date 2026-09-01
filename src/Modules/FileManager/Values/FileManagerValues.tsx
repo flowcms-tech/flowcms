@@ -1,6 +1,6 @@
 import type { ExtendedColumnDef } from '@/components/shared/ElementTable/ElementTable.types'
 import { parseDate } from '@/Framework/Functions/DateFunctions'
-import { mediaDownloadPath } from '@/Framework/Storage/mediaUrl'
+import { mediaDownloadPath, mediaPath } from '@/Framework/Storage/mediaUrl'
 import { getFileCategory } from '@/Framework/Functions/FileValidation'
 import FileManagerFileIcon from '../Components/FileManagerFileIcon'
 import FileManagerFileActionsMenu from '../Components/FileManagerFileActionsMenu'
@@ -55,6 +55,11 @@ export function buildColumns(
       cell: ({ row }) => (
         <div className="flex justify-end">
           <FileManagerFileActionsMenu
+            previewHref={
+              getFileCategory(row.original.name) === 'image'
+                ? mediaPath(row.original.id)
+                : undefined
+            }
             onProperties={() => onProperties(row.original)}
             downloadHref={mediaDownloadPath(row.original.id)}
             onConvert={
