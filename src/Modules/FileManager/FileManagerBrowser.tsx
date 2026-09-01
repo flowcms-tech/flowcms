@@ -2,12 +2,17 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy, FolderInput, LayoutGrid, List, Trash2, Upload } from 'lucide-react'
+import { Check, Copy, FolderInput, LayoutGrid, List, Trash2, Upload } from 'lucide-react'
 import ElementTable from '@/components/shared/ElementTable/ElementTable'
 import ElementButton from '@/components/shared/ElementButton/ElementButton'
 import ElementToast from '@/components/shared/ElementToast/ElementToast'
 import ElementModal from '@/components/shared/ElementModal/ElementModal'
-import { isAllowedFileType, ALLOWED_FILE_ACCEPT_ATTRIBUTE } from '@/Framework/Functions/FileValidation'
+import {
+  isAllowedFileType,
+  getFileCategory,
+  ALLOWED_FILE_ACCEPT_ATTRIBUTE,
+  type FileCategory,
+} from '@/Framework/Functions/FileValidation'
 import { FileManagerServices } from './Services/FileManagerServices'
 import { buildColumns } from './Values/FileManagerValues'
 import FileManagerNameModal from './Components/FileManagerNameModal'
@@ -21,6 +26,37 @@ import FileManagerFileGrid from './Components/FileManagerFileGrid'
 import type { FileManagerItem } from './Types'
 
 type ViewMode = 'list' | 'grid'
+
+/**
+ * Turns the browser into a picker as well as a manager.
+ *
+ * This is the ONLY difference between the admin page and the dialog an editor
+ * opens from a form field. Both render this same component; the page passes
+ * nothing, the dialog passes this. Any feature added below therefore appears in
+ * both by construction — there is no second implementation to keep in step.
+ */
+export interface FileManagerSelection {
+  mode: 'single' | 'multiple'
+  /**
+   * Categories that may be RETURNED. It never hides anything: a folder shows
+   * the same contents in both shells, and a file you cannot choose can still be
+   * renamed, moved or deleted.
+   */
+  accept?: FileCategory | FileCategory[]
+  /** Storage keys (`FileManagerItem.id`), never URLs. */
+  onConfirm: (keys: string[]) => void
+}
+
+export interface FileManagerBrowserProps {
+  /** Absent → management only. Present → management *and* picking. */
+  selection?: FileManagerSelection
+}
+
+function matchesAccept(fileName: string, accept?: FileCategory | FileCategory[]): boolean {
+  if (!accept) return true
+  const list = Array.isArray(accept) ? accept : [accept]
+  return list.includes(getFileCategory(fileName))
+}
 
 interface PendingUpload {
   files: File[]
@@ -57,7 +93,7 @@ function splitFileName(name: string): [stem: string, extension: string] {
   return [name.slice(0, dot), name.slice(dot)]
 }
 
-export default function FileManagerModule() {
+export default function FileManagerBrowser({ selection }: FileManagerBrowserProps = {}) {
   const queryClient = useQueryClient()
   const inputRef = useRef<HTMLInputElement>(null)
   const dragCounter = useRef(0)
@@ -219,9 +255,32 @@ export default function FileManagerModule() {
     }
   }
 
+  const canPick = (file: FileManagerItem) =>
+    selection !== undefined && matchesAccept(file.name, selection.accept)
+
+  function handlePickSingle(file: FileManagerItem) {
+    if (selection?.mode !== 'single' || !canPick(file)) return
+    selection.onConfirm([file.id])
+  }
+
   function renderBulkActions(selected: FileManagerItem[], clearSelection: () => void) {
+    // The confirm for a multi-pick lives HERE rather than in the hosting
+    // dialog's footer, so the row-selection set never has to be lifted out of
+    // the table that owns it. One set of checkboxes, both outcomes in view.
+    const pickable = selected.filter(canPick)
+
     return (
       <div className="flex items-center gap-2">
+        {selection?.mode === 'multiple' && (
+          <ElementButton
+            size="sm"
+            disabled={pickable.length === 0}
+            onClick={() => selection.onConfirm(pickable.map((file) => file.id))}
+          >
+            <Check size={14} />
+            Use {pickable.length} selected
+          </ElementButton>
+        )}
         <ElementButton
           variant="outline"
           size="sm"
@@ -450,6 +509,8 @@ export default function FileManagerModule() {
             emptyContent={<p>No files found</p>}
             classNames={{ container: 'flex h-full min-h-0 flex-col' }}
             bulkActionContent={renderBulkActions}
+            onRowClick={selection?.mode === 'single' ? handlePickSingle : undefined}
+            rowClassName={(file) => (selection && !canPick(file) ? 'opacity-40' : undefined)}
           />
         ) : (
           <FileManagerFileGrid
@@ -463,6 +524,8 @@ export default function FileManagerModule() {
             onCopy={handleRequestFileCopy}
             onDelete={handleRequestFileDelete}
             bulkActionContent={renderBulkActions}
+            onFileClick={selection?.mode === 'single' ? handlePickSingle : undefined}
+            isFileDimmed={(file) => selection !== undefined && !canPick(file)}
           />
         )}
         {isDragging && (

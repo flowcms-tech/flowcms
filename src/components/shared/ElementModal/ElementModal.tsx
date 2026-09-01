@@ -24,6 +24,10 @@ const modalSizeVariants = cva("w-[90vw]", {
       sm: "sm:w-[568px]",
       md: "md:w-[768px]",
       lg: "lg:w-[920px]",
+      // For a dialog that hosts a whole screen rather than a form — a tree and
+      // a file table need the room, so this one tracks the viewport instead of
+      // settling on a fixed column.
+      xl: "w-[95vw] max-w-[1600px]",
     },
   },
   defaultVariants: { size: "sm" },
@@ -59,7 +63,7 @@ export interface ElementModalProps {
   onClose?:      (open: boolean) => void
   title:         React.ReactNode
   children:      React.ReactNode
-  size?:         "sm" | "md" | "lg"
+  size?:         "sm" | "md" | "lg" | "xl"
   variant?:      "default" | "danger"
   titleIcon?:    React.ReactNode | false
   trigger?:      React.ReactNode

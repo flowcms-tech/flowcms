@@ -20,6 +20,10 @@ interface FileManagerFileGridProps {
   onCopy: (file: FileManagerItem) => void
   onDelete: (file: FileManagerItem) => void
   bulkActionContent?: (selected: FileManagerItem[], clearSelection: () => void) => ReactNode
+  /** Set only when the grid is being used to choose a file. */
+  onFileClick?: (file: FileManagerItem) => void
+  /** Present but not choosable — shown and still manageable, just dimmed. */
+  isFileDimmed?: (file: FileManagerItem) => boolean
 }
 
 export default function FileManagerFileGrid({
@@ -34,6 +38,8 @@ export default function FileManagerFileGrid({
   onCopy,
   onDelete,
   bulkActionContent,
+  onFileClick,
+  isFileDimmed,
 }: FileManagerFileGridProps) {
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
 
@@ -83,12 +89,14 @@ export default function FileManagerFileGrid({
           <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
             {files.map((file) => {
               const isSelected = selectedKeys.has(file.id)
+              const isDimmed = isFileDimmed?.(file) ?? false
               return (
                 <div
                   key={file.id}
+                  onClick={onFileClick && !isDimmed ? () => onFileClick(file) : undefined}
                   className={`group relative flex flex-col items-center gap-2 rounded-lg border p-3 text-center hover:bg-muted/50 ${
                     isSelected ? 'border-primary bg-primary/5' : 'border-transparent hover:border-border'
-                  }`}
+                  } ${onFileClick && !isDimmed ? 'cursor-pointer' : ''} ${isDimmed ? 'opacity-40' : ''}`}
                 >
                   <div
                     className={`absolute left-1 top-1 transition-opacity ${

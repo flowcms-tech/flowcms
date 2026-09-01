@@ -8,9 +8,14 @@ import { cn } from '@/lib/utils'
 import type { ClassValue } from 'clsx'
 import type { FileCategory } from '@/Framework/Functions/FileValidation'
 import ElementLabelHint from '@/components/shared/ElementLabelHint/ElementLabelHint'
-import ElementFileSelectorModal from './ElementFileSelectorModal'
-import ElementFileSelectorFileIcon from './ElementFileSelectorFileIcon'
-import { fetchFileSelectorDirectory, type FileSelectorItem } from './ElementFileSelector.api'
+// Imports a module from a shared component, which inverts the usual direction.
+// Deliberate: the picker IS the File Manager, and duplicating it here is what
+// let the two drift apart in the first place. `ElementEditor` already reaches
+// into the same module for pasted-image uploads.
+import FileManagerPickerModal from '@/Modules/FileManager/FileManagerPickerModal'
+import FileManagerFileIcon from '@/Modules/FileManager/Components/FileManagerFileIcon'
+import { FileManagerServices } from '@/Modules/FileManager/Services/FileManagerServices'
+import type { FileManagerItem } from '@/Modules/FileManager/Types'
 
 export interface ElementFileSelectorClassNames {
   root?: ClassValue
@@ -67,7 +72,7 @@ function Core({
   multiple, accept, errorVariant, classNames, name,
 }: CoreProps) {
   const [isModalOpen, setIsModalOpen] = useState(false)
-  const [resolvedItems, setResolvedItems] = useState<Record<string, FileSelectorItem>>({})
+  const [resolvedItems, setResolvedItems] = useState<Record<string, FileManagerItem>>({})
 
   const keys = multiple ? ((value as string[]) ?? []) : (value ? [value as string] : [])
 
@@ -80,9 +85,9 @@ function Core({
 
     Promise.all(
       prefixes.map((prefix) =>
-        fetchFileSelectorDirectory(prefix)
+        FileManagerServices.listDirectory(prefix)
           .then((listing) => listing.files)
-          .catch(() => [] as FileSelectorItem[])
+          .catch(() => [] as FileManagerItem[])
       )
     ).then((results) => {
       if (cancelled) return
@@ -101,23 +106,11 @@ function Core({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(keys)])
 
-  function cacheItems(items: FileSelectorItem[]) {
-    setResolvedItems((prev) => {
-      const next = { ...prev }
-      for (const item of items) next[item.id] = item
-      return next
-    })
-  }
-
-  function handleSelectSingle(item: FileSelectorItem) {
-    cacheItems([item])
-    onChange(item.id)
-    setIsModalOpen(false)
-  }
-
-  function handleSelectMultiple(items: FileSelectorItem[]) {
-    cacheItems(items)
-    onChange(items.map((item) => item.id))
+  // Keys are all the picker returns, and all this field stores. Names and
+  // thumbnails for display are resolved by the effect above, which already has
+  // to do that for keys loaded from the server.
+  function handleConfirm(keys: string[]) {
+    onChange(multiple ? keys : (keys[0] ?? null))
     setIsModalOpen(false)
   }
 
@@ -168,7 +161,7 @@ function Core({
                     {thumbnailUrl
                       // eslint-disable-next-line @next/next/no-img-element
                       ? <img src={thumbnailUrl} alt={fileName} className="size-full object-cover" />
-                      : <ElementFileSelectorFileIcon name={fileName} size={16} className="text-muted-foreground" />}
+                      : <FileManagerFileIcon name={fileName} size={16} className="text-muted-foreground" />}
                   </div>
                   <span className="min-w-0 flex-1 truncate text-sm">{fileName}</span>
                   {!disabled && (
@@ -231,13 +224,12 @@ function Core({
       </AnimatePresence>
 
 
-      <ElementFileSelectorModal
+      <FileManagerPickerModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         multiple={multiple}
         accept={accept}
-        onSelectSingle={handleSelectSingle}
-        onSelectMultiple={handleSelectMultiple}
+        onConfirm={handleConfirm}
       />
     </div>
   )
@@ -305,4 +297,6 @@ export default function ElementFileSelector({
   )
 }
 
-export type { FileSelectorItem }
+// Kept as an alias so any consumer that imported the old name still compiles.
+// `FileManagerItem` is now the single definition of a stored object.
+export type { FileManagerItem as FileSelectorItem }

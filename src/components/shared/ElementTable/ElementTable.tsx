@@ -15,6 +15,7 @@ import {
 } from "@tanstack/react-table"
 import { AnimatePresence, motion } from "framer-motion"
 import { ChevronRight } from "lucide-react"
+import type { ClassValue } from "clsx"
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -209,12 +210,16 @@ function TableBody<TData extends Record<string, unknown>>({
   hasExpandable,
   hasCheckbox,
   expandedRowContent,
+  onRowClick,
+  rowClassName,
 }: {
   table: ReturnType<typeof useReactTable<TData>>
   classNames?: ElementTableClassNames
   hasExpandable: boolean
   hasCheckbox: boolean
   expandedRowContent?: (row: Row<TData>) => React.ReactNode
+  onRowClick?: (row: TData) => void
+  rowClassName?: (row: TData) => ClassValue
 }) {
   const [openRowId, setOpenRowId] = useState<string | null>(null)
 
@@ -232,15 +237,21 @@ function TableBody<TData extends Record<string, unknown>>({
       {table.getRowModel().rows.map((row) => (
         <React.Fragment key={row.id}>
           <tr
+            onClick={onRowClick ? () => onRowClick(row.original) : undefined}
             className={cn(
               "transition-colors hover:bg-muted/50",
-              row.getIsSelected() && "bg-muted/30"
+              row.getIsSelected() && "bg-muted/30",
+              onRowClick && "cursor-pointer",
+              rowClassName?.(row.original)
             )}
           >
             {hasExpandable && (
               <td
                 className="w-10 pl-4 cursor-pointer text-muted-foreground"
-                onClick={() => setOpenRowId((p) => (p === row.id ? null : row.id))}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setOpenRowId((p) => (p === row.id ? null : row.id))
+                }}
               >
                 <ChevronRight
                   size={16}
@@ -249,7 +260,9 @@ function TableBody<TData extends Record<string, unknown>>({
               </td>
             )}
             {hasCheckbox && (
-              <td className="w-10 pl-4">
+              // Ticking a row is not activating it: without this, a row-click
+              // handler would fire alongside every checkbox toggle.
+              <td className="w-10 pl-4" onClick={(e) => e.stopPropagation()}>
                 <Checkbox
                   checked={row.getIsSelected()}
                   onCheckedChange={(v) => row.toggleSelected(!!v)}
@@ -320,6 +333,8 @@ function ElementTableCore<TData extends Record<string, unknown>>({
   isDragDisabled = false,
   onSelectionChange,
   bulkActionContent,
+  onRowClick,
+  rowClassName,
   totalCount,
   pageSize = 10,
   nav,
@@ -483,6 +498,8 @@ function ElementTableCore<TData extends Record<string, unknown>>({
               hasExpandable={hasExpandable}
               hasCheckbox={hasCheckbox}
               expandedRowContent={expandedRowContent}
+              onRowClick={onRowClick}
+              rowClassName={rowClassName}
             />
           )}
         </table>
