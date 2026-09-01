@@ -140,7 +140,7 @@ which are unavailable inside Next-compiled server code.
 ## Status
 
 Published on npm and licensed `GPL-2.0-or-later`. The current release is
-**0.1.1**.
+**0.2.0**.
 
 It still carries a `prepublishOnly` guard, and that is permanent rather than
 left over: it refuses unless `FLOWCMS_RELEASE=1`, which only the publish job in

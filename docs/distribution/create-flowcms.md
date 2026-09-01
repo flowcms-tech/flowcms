@@ -2,7 +2,7 @@
 
 The scaffolder that creates a new FlowCMS site.
 
-> **Published.** `create-flowcms` is on npm at **0.1.1**, so
+> **Published.** `create-flowcms` is on npm at **0.2.0**, so
 > `npx create-flowcms@latest my-site` resolves, and so do
 > `npm create flowcms@latest`, `pnpm create flowcms`, `yarn create flowcms` and
 > `bun create flowcms`. It is published from a release tag through npm Trusted

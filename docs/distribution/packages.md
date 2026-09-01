@@ -2,8 +2,8 @@
 
 What FlowCMS publishes, what is public, and what a theme package may rely on.
 
-> **Published.** `flowcms` and `create-flowcms` are on npm at **0.1.1**, cut
-> from the `v0.1.1` tag through npm Trusted Publishing, with provenance. See
+> **Published.** `flowcms` and `create-flowcms` are on npm at **0.2.0**, cut
+> from the `v0.2.0` tag through npm Trusted Publishing, with provenance. See
 > [Project status](../../README.md#project-status) and
 > [How a release reaches npm](#how-a-release-reaches-npm).
 
@@ -12,9 +12,9 @@ What FlowCMS publishes, what is public, and what a theme package may rely on.
 | | What it is | Published? |
 |---|---|---|
 | `flowcms-app` (repository root) | the FlowCMS **application** — the CMS itself, and the template `create-flowcms` emits | never. `"private": true` |
-| `flowcms` (`packages/flowcms`) | the public **theme API**, built from `src/Themes/contract` | **yes** — `flowcms@0.1.1` |
+| `flowcms` (`packages/flowcms`) | the public **theme API**, built from `src/Themes/contract` | **yes** — `flowcms@0.2.0` |
 | `@example/flowcms-theme-aurora` | an example theme, used to prove the boundary | never. It is a fixture |
-| `create-flowcms` (`packages/create-flowcms`) | the scaffolder that generates a site — see [create-flowcms.md](./create-flowcms.md) | **yes** — `create-flowcms@0.1.1` |
+| `create-flowcms` (`packages/create-flowcms`) | the scaffolder that generates a site — see [create-flowcms.md](./create-flowcms.md) | **yes** — `create-flowcms@0.2.0` |
 
 There is one published package and it exposes one subpath:
 
@@ -359,8 +359,8 @@ with each — which is a different question and does not stand in for this one.
 
 ## How a release reaches npm
 
-Both packages are published. The current release is **0.1.1**, cut from the
-`v0.1.1` tag.
+Both packages are published. The current release is **0.2.0**, cut from the
+`v0.2.0` tag.
 
 Publication is deliberately hard to trigger. `.github/workflows/release.yml`
 neither bumps versions nor creates tags: a `v*` tag push runs the proof tiers
