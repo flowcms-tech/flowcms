@@ -15,7 +15,7 @@ package stops compiling and `tests/themes/publicContract.test.ts` fails.
 > ```
 >
 > It is built from `src/Themes/contract` into `packages/flowcms`, and the
-> current release is **0.2.0**. Declare a `flowcmsCompat` range your theme
+> current release is **0.2.1**. Declare a `flowcmsCompat` range your theme
 > actually renders against — FlowCMS is 0.x, where a minor bump is a breaking
 > change by convention, so `^0.2.0` accepts `0.2.1` but not `0.3.0`.
 >

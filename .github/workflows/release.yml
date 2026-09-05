@@ -16,7 +16,9 @@
 #   git tag                v0.1.0 exists and is IMMUTABLE. A published version's
 #                          tag is what provenance and every consumer resolve
 #                          back to. Never move, delete or recreate it.
-#   GitHub Release         none, and the step that would create one is disabled
+#   GitHub Release         created by this workflow, last, after both publishes
+#                          succeed. Its notes are the changelog section for the
+#                          version, not the whole file
 #   npm auth               NO PUBLISH CREDENTIAL IN THIS FILE, at any scope
 #                          within it. Publication authenticates through npm
 #                          Trusted Publishing: the npm CLI exchanges this job's
@@ -31,13 +33,26 @@
 #
 # WHAT MAKES A PUBLICATION HAPPEN — all four, together:
 #
-#   1. Somebody dispatches this workflow by hand. A tag push runs the proof
-#      tiers and nothing else; an ordinary push to main does not run this file
-#      at all.
+#   1. This workflow is dispatched. A tag push runs the proof tiers and nothing
+#      else; an ordinary push to main does not run this file at all.
 #   2. `publish: true` on that dispatch.
-#   3. `confirm` typed to match the exact phrase the job checks.
+#   3. `confirm` matching the exact phrase the job checks.
 #   4. The `npm-publish` GitHub environment lets the job start, which is where
 #      required reviewers belong.
+#
+# WHO SUPPLIES 1-3 CHANGED, and this file did not. They used to be typed by a
+# maintainer at the Actions UI. `release-on-merge.yml` now supplies them
+# automatically when a merge to main carries a version with no tag yet — that
+# is, when the release pull request is merged. Every gate below is unchanged
+# and still applies to that dispatch exactly as it applied to a typed one: the
+# run must be on a tag that names the version in the manifests, the registry
+# must not already hold that version, and the tiers must be green.
+#
+# WHAT THAT LEAVES AS THE HUMAN GATE. Gate 4, and only gate 4. Merging the pull
+# request is the decision; the `npm-publish` environment's required reviewer is
+# the last point at which it can be stopped. Removing that reviewer makes
+# merging the pull request sufficient on its own — a real choice, not an
+# oversight, and worth making knowingly.
 #
 # And then, per package, `prepublishOnly` -> publish-guard.mjs validates the
 # licence, the repository metadata and the built artifacts before npm sends
@@ -61,8 +76,11 @@
 # publishing on any answer from the registry it cannot interpret. See the
 # release-target preflight in the publish job.
 #
-# This file contains no changelog logic and no version bumping. Creating the
-# tag and the GitHub Release remains a separate, deliberate act.
+# This file performs no version bumping, and it reads the changelog only to cut
+# one section out of it for the release notes. Creating the tag is somebody
+# else's job: `release-on-merge.yml` does it on the merge that moves the
+# version, and this workflow refuses to run against anything but a tag that
+# already exists and names the version in the manifests.
 # ---------------------------------------------------------------------------
 name: Release
 
@@ -222,17 +240,18 @@ jobs:
             echo "less than it looks like it did."
             echo
             echo "**This proof does not publish anything.** Publication happens only"
-            echo "on a manual dispatch of this workflow with publish: true and the"
+            echo "on a dispatch of this workflow with publish: true and the"
             echo "confirmation phrase, and only through the npm-publish environment."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # -------------------------------------------------------------------------
   # THE PUBLISH JOB.
   #
-  # Reachable only by a deliberate workflow_dispatch that sets `publish: true`
-  # AND types the confirmation phrase. A tag push supplies neither input, so it
-  # runs the proof tiers above and stops. An ordinary push to main does not
-  # trigger this file at all.
+  # Reachable only by a workflow_dispatch that sets `publish: true` AND supplies
+  # the confirmation phrase. A tag push supplies neither input, so it runs the
+  # proof tiers above and stops. An ordinary push to main does not trigger this
+  # file at all — `release-on-merge.yml` is what watches main, and all it can do
+  # is perform this same dispatch against a tag it created.
   #
   # The `npm-publish` environment is the fourth gate, and the one that belongs
   # to a person rather than to this file: configure it with required reviewers.
@@ -246,14 +265,19 @@ jobs:
     if: ${{ inputs.publish && inputs.confirm == 'PUBLISH FLOWCMS' }}
     environment: npm-publish
     permissions:
-      # THE ONLY ELEVATED PERMISSION IN THE ENTIRE PIPELINE, scoped to this job.
+      # THE ELEVATED PERMISSIONS, scoped to this job.
       #
-      # `contents` stays READ. The publish path writes to npm and nothing
-      # back to the repository: the GitHub Release step below is
-      # disabled, and it is the only thing here that would need write. Enabling
-      # that step means adding `contents: write` back in the same commit — the
-      # permission arrives with the capability that needs it, not before it.
-      contents: read
+      # `contents: write` exists for exactly one step: `gh release create` at
+      # the end of this job. It arrived in the same commit that enabled that
+      # step, which is the rule `tests/ci/workflowPolicy.test.ts` enforces in
+      # both directions — the permission and the capability that justifies it
+      # cannot move independently. If that step is ever disabled again, this
+      # goes back to `read` in the same commit.
+      #
+      # It is NOT what publishes. Nothing on the registry path reads this
+      # token; the publish authenticates through OIDC below and holds no
+      # credential of its own.
+      contents: write
       # OIDC. This is now load-bearing twice over: it is what npm Trusted
       # Publishing exchanges for a publish credential, AND what provenance
       # signs with. Without it there is no way to authenticate at all — which
@@ -584,16 +608,59 @@ jobs:
         run: npm publish --provenance --access public
 
       # ---------------------------------------------------------------------
-      # The GitHub Release is prepared but NOT enabled. Creating it remains a
-      # separate deliberate act, in its own phase, with its own review.
-      # Enabling it means removing the
-      # `if: ${{ false }}` below, in a commit, with a name on it — and, in that
-      # same commit, restoring `contents: write` to this job's permissions,
-      # which `gh release create` needs and which the publish path deliberately
-      # does without for as long as this step stays off.
+      # The GitHub Release. ENABLED, together with the `contents: write` this
+      # step is the sole justification for — the two moved in one commit, which
+      # is what `tests/ci/workflowPolicy.test.ts` requires of them.
+      #
+      # LAST, and deliberately so. The registry is the irreversible half: a
+      # published version cannot be taken back, while a GitHub Release can be
+      # edited or deleted. Creating it after both publishes means a release
+      # page never describes a version that failed to reach the registry, and
+      # the failure mode if this step is the one that breaks is a missing page
+      # rather than a lying one.
+      #
+      # THE NOTES ARE ONE SECTION, not the file. `--notes-file CHANGELOG.md`
+      # was the placeholder here and it would have attached the entire history
+      # — every release back to 0.1.0 — to every release page.
       # ---------------------------------------------------------------------
+      - name: Extract this version's changelog section
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const { readFileSync, writeFileSync } = require('node:fs');
+
+          const version = process.env.TAG.replace(/^v/, '');
+          const changelog = readFileSync('CHANGELOG.md', 'utf8');
+
+          // From this version's heading to the next `## ` heading, whichever it
+          // is. Anchored on the heading rather than on a line count, because the
+          // sections are of wildly different lengths.
+          const start = new RegExp(`^## \\[${version.replace(/\./g, '\\.')}\\][^\\n]*$`, 'm');
+          const at = changelog.search(start);
+          if (at === -1) {
+            console.log(`::error::CHANGELOG.md has no "## [${version}]" section, so this release would have no notes. The tag and the manifests agree on the version, so what is missing is the changelog entry.`);
+            process.exit(1);
+          }
+          const rest = changelog.slice(at);
+          const next = rest.slice(1).search(/^## /m);
+          const section = (next === -1 ? rest : rest.slice(0, next + 1)).trimEnd();
+
+          writeFileSync('RELEASE_NOTES.md', `${section}\n`);
+          console.log(`${section.split('\n').length} lines of notes for ${version}.`);
+          NODE
+
       - name: Create the GitHub Release
-        if: ${{ false }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" --verify-tag --notes-file CHANGELOG.md
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # `--verify-tag` refuses to create the tag as a side effect: by this
+          # point the tag exists and is what was published from, and a release
+          # that invented its own would name a different commit.
+          gh release create "$TAG" \
+            --verify-tag \
+            --title "FlowCMS ${TAG#v}" \
+            --notes-file RELEASE_NOTES.md
