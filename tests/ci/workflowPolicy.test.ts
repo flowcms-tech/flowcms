@@ -1030,14 +1030,59 @@ describe("release safety", () => {
     ).not.toMatch(/\b(available|is free|unclaimed)\b/i)
   })
 
-  it("leaves the GitHub Release step unreachable until it is deliberately enabled", () => {
+  /**
+   * THIS TEST USED TO ASSERT THE OPPOSITE, and the reason it did expired.
+   *
+   * It required `if: ${{ false }}` on the GitHub Release step, because creating
+   * the release was "a separate deliberate act, in its own phase". That phase
+   * is this workflow now: the release is cut by merging a pull request, and a
+   * released version with no release page is a gap somebody would close by
+   * hand every time.
+   *
+   * So the step is enabled, and what is pinned instead is the two properties
+   * that make it safe. Both are things a plausible edit would get wrong, and
+   * neither is visible from a green run.
+   */
+  it("creates the GitHub Release last, from the tag, with this version's notes", () => {
     const text = raw()
     const at = text.indexOf("name: Create the GitHub Release")
-    if (at === -1) return // not prepared yet, which is also a valid state
+    expect(at, "release.yml no longer creates a GitHub Release").toBeGreaterThan(-1)
+
+    const step = text.slice(at, at + 600)
+
+    // ORDER. The registry is the irreversible half. A release page created
+    // before the publishes could describe a version that never shipped; created
+    // after them, the worst case is a missing page.
+    const lastPublish = text.lastIndexOf("run: npm publish")
+    expect(lastPublish, "release.yml has no publish step").toBeGreaterThan(-1)
+    expect(at, "the GitHub Release is created before the packages are published").toBeGreaterThan(
+      lastPublish,
+    )
+
+    // `--verify-tag` refuses to invent the tag as a side effect. Without it a
+    // typo creates a NEW tag on whatever the run's ref happens to be, and the
+    // release then names a commit nothing was published from.
+    expect(step, "the GitHub Release may create its own tag").toMatch(/--verify-tag\b/)
+
+    // ONE SECTION, NOT THE FILE. The placeholder here was
+    // `--notes-file CHANGELOG.md`, which would attach the entire history —
+    // every release back to 0.1.0 — to every release page.
     expect(
-      text.slice(at, at + 300),
-      "the GitHub Release step is reachable before anyone enabled it",
-    ).toMatch(/if:\s*\$\{\{\s*false\s*\}\}/)
+      step,
+      "the release notes are the whole changelog rather than this version's section",
+    ).not.toMatch(/--notes-file\s+CHANGELOG\.md\b/)
+    expect(step, "the release has no notes file at all").toMatch(/--notes-file\s+\S+/)
+
+    // And the notes file is something this job actually produced.
+    const extractAt = text.indexOf("name: Extract this version's changelog section")
+    expect(extractAt, "nothing extracts the changelog section the release notes come from")
+      .toBeGreaterThan(-1)
+    expect(extractAt, "the notes are extracted after the release that uses them").toBeLessThan(at)
+    const notes = /--notes-file\s+(\S+)/.exec(step)?.[1]
+    expect(
+      text.slice(extractAt, at),
+      `the extraction step never writes ${notes}`,
+    ).toContain(notes!)
   })
 
   it("runs every tier of the pipeline as the release proof", () => {
