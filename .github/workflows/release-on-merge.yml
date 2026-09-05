@@ -1,0 +1,195 @@
+# ---------------------------------------------------------------------------
+# Release on merge.
+#
+# WHAT THIS CHANGED, stated plainly because it reverses a policy this
+# repository held deliberately until now.
+#
+# `release.yml` used to be reachable only by a person: a maintainer created the
+# tag by hand, pushed it, then dispatched the workflow with a boolean and a
+# typed confirmation phrase. The comment on that file said publication was "a
+# separate, deliberate act", and a test in `tests/ci/workflowPolicy.test.ts`
+# asserted that nothing an ordinary merge could supply would ever reach the
+# registry.
+#
+# The deliberate act is now MERGING THE RELEASE PULL REQUEST. This file is what
+# turns that merge into the tag and the dispatch that used to be typed by hand.
+# `release.yml` itself is untouched in its gating: it still refuses anything
+# that is not a tag naming the version in the manifests, still refuses a
+# version the registry already holds, and still runs inside the `npm-publish`
+# environment, whose required reviewer is the one gate that belongs to a person
+# rather than to a file. That approval is now the last point at which a release
+# can be stopped, which is worth knowing before removing it.
+#
+# WHY A DISPATCH RATHER THAN A TAG PUSH. `release.yml` triggers on a `v*` tag
+# push, and the obvious design is to push the tag and let that fire. It does
+# not work: GitHub does not start a workflow run from an event created with the
+# repository's own `GITHUB_TOKEN`, so a tag pushed from here triggers nothing at
+# all — silently, which is the worst shape a release path can fail in.
+# `workflow_dispatch` is one of the two documented exceptions to that rule, so
+# it is the only path from this job to that workflow. The tag is still created
+# and pushed, because the tag is what provenance and every consumer resolve
+# back to; it just is not what starts the run.
+#
+# WHAT MAKES AN ORDINARY MERGE HARMLESS. Every push to `main` runs this. The
+# decision is made by asking whether a tag already exists for the version the
+# tree carries: merges that do not move `FLOWCMS_VERSION` find their tag
+# present and stop, having done nothing. That makes the job idempotent — a
+# re-run of a release merge is also a no-op — and it means the thing that
+# triggers a release is the version bump itself rather than a branch name, a
+# label, or a commit-message convention that a future merge could imitate by
+# accident.
+# ---------------------------------------------------------------------------
+name: Release on merge
+
+on:
+  push:
+    branches:
+      - main
+
+# Read-only for the file. The one job that writes asks in its own block.
+permissions:
+  contents: read
+
+# Serialised across the whole repository rather than per-ref: two merges landing
+# together must not race to create the same tag.
+concurrency:
+  group: release-on-merge
+  cancel-in-progress: false
+
+jobs:
+  tag-and-dispatch:
+    name: Tag the release and dispatch the publish
+    runs-on: ubuntu-24.04
+    permissions:
+      # Pushing the annotated tag. Scoped to this job; the file's default above
+      # stays read.
+      contents: write
+      # `gh workflow run`. Without it the dispatch is refused, and the tag would
+      # sit there naming a release that never happened.
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # Tags, and the history the tag is created on. A shallow checkout
+          # cannot answer "does this tag already exist", which is the entire
+          # decision this job makes.
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # -----------------------------------------------------------------------
+      # The decision. Reads the tree, writes nothing, and is the only place that
+      # decides whether this merge is a release.
+      # -----------------------------------------------------------------------
+      - name: Decide whether this merge is a release
+        id: decide
+        run: |
+          set -euo pipefail
+
+          VERSION=$(node -e 'const {readFileSync}=require("node:fs");const m=readFileSync("src/Themes/contract/version.ts","utf8").match(/FLOWCMS_VERSION\s*=\s*"([^"]+)"/);if(!m){console.error("::error::FLOWCMS_VERSION could not be read from src/Themes/contract/version.ts. A release cannot be identified without it.");process.exit(1)}process.stdout.write(m[1])')
+          TAG="v${VERSION}"
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "${TAG} already exists — this merge does not move the version, so there is nothing to release."
+            exit 0
+          fi
+
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "${TAG} does not exist yet — this merge is the ${VERSION} release."
+
+      # -----------------------------------------------------------------------
+      # The gates, before the tag rather than after it. A tag is the one thing
+      # here that must never be created wrongly: it is immutable in practice,
+      # because a published version's tag is what provenance resolves back to.
+      # -----------------------------------------------------------------------
+      - name: The version sources agree
+        if: steps.decide.outputs.release == 'true'
+        run: node scripts/release-version-sync.mjs
+
+      - name: The changelog records this version, dated
+        if: steps.decide.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.decide.outputs.version }}
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const { readFileSync } = require('node:fs');
+          const version = process.env.VERSION;
+          const changelog = readFileSync('CHANGELOG.md', 'utf8');
+
+          // The heading, with a date on it. An undated section is the shape a
+          // release entry has while it is still being written, and shipping one
+          // is how a changelog starts disagreeing with the registry.
+          const heading = new RegExp(
+            `^## \\[${version.replace(/\./g, '\\.')}\\][^\\n]*\\d{4}-\\d{2}-\\d{2}`,
+            'm',
+          );
+          if (!heading.test(changelog)) {
+            console.log(`::error::CHANGELOG.md has no dated "## [${version}]" section. Refusing to tag a release nobody can read the notes for.`);
+            process.exit(1);
+          }
+          console.log(`CHANGELOG.md carries a dated section for ${version}.`);
+          NODE
+
+      # -----------------------------------------------------------------------
+      # The tag. Annotated, on the merge commit, matching what a maintainer used
+      # to type: `git tag -a v0.2.1 -m "FlowCMS 0.2.1"`.
+      # -----------------------------------------------------------------------
+      - name: Create and push the annotated tag
+        if: steps.decide.outputs.release == 'true'
+        env:
+          TAG: ${{ steps.decide.outputs.tag }}
+          VERSION: ${{ steps.decide.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "FlowCMS ${VERSION}"
+          git push origin "$TAG"
+          echo "pushed ${TAG} at $(git rev-parse HEAD)"
+
+      # -----------------------------------------------------------------------
+      # The dispatch. Supplies by hand what a maintainer used to supply by hand;
+      # every gate on the other side of it is unchanged, including the
+      # environment approval that still has to be clicked by a person.
+      # -----------------------------------------------------------------------
+      - name: Dispatch the release workflow against the tag
+        if: steps.decide.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.decide.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml \
+            --ref "$TAG" \
+            -f publish=true \
+            -f confirm='PUBLISH FLOWCMS'
+          echo "dispatched release.yml against ${TAG}."
+          echo "It runs the full proof tiers, then waits for the protected publish environment's reviewer."
+
+      - name: Summary
+        if: always()
+        env:
+          TAG: ${{ steps.decide.outputs.tag }}
+          RELEASING: ${{ steps.decide.outputs.release }}
+        run: |
+          {
+            if [ "${RELEASING}" = "true" ]; then
+              echo "## ${TAG} tagged and dispatched"
+              echo ""
+              echo "The release workflow is running against \`${TAG}\`. It will stop at the"
+              echo "protected publish environment and wait for a reviewer to approve the deployment."
+            else
+              echo "## No release"
+              echo ""
+              echo "\`${TAG}\` already exists, so this merge did not move the version. Nothing was tagged."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

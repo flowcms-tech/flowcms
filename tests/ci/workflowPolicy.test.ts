@@ -62,6 +62,14 @@ function valuesFor(source: string, key: string): string[] {
 
 const RELEASE = "release.yml"
 
+/**
+ * The other half of the release path. It creates the tag on a version-bumping
+ * merge and dispatches `release.yml` against it; it never publishes anything
+ * itself. Kept as a named constant because several assertions below have to
+ * treat the release path as two files rather than one.
+ */
+const RELEASE_ON_MERGE = "release-on-merge.yml"
+
 describe("the workflows exist", () => {
   it("has a .github/workflows directory", () => {
     expect(existsSync(DIR), ".github/workflows is missing").toBe(true)
@@ -74,6 +82,7 @@ describe("the workflows exist", () => {
     ["consumer-proofs.yml", "the clean-consumer proofs"],
     ["portability.yml", "the Windows/macOS suites and the package-manager matrix"],
     [RELEASE, "the release proof and the gated publish job"],
+    [RELEASE_ON_MERGE, "the tag and dispatch a version-bumping merge produces"],
   ])("ships %s — %s", (file) => {
     expect(FILES).toContain(file)
   })
@@ -88,12 +97,53 @@ describe("least privilege", () => {
     )
   })
 
-  it("grants a write permission only in the release workflow", () => {
+  /**
+   * TWO FILES MAY ELEVATE, and they are the two the release path is made of.
+   * Everything else in this directory runs tests and needs nothing.
+   *
+   * `release-on-merge.yml` joined the list when the release stopped being typed
+   * by hand: it pushes a tag (`contents: write`) and dispatches `release.yml`
+   * (`actions: write`). Neither of those touches the registry — it holds no
+   * credential and runs no publish step, which the release-safety suite below
+   * asserts directly rather than leaving to this exemption.
+   */
+  const MAY_ELEVATE = [RELEASE, RELEASE_ON_MERGE]
+
+  it("grants a write permission only in the two release workflows", () => {
     for (const file of FILES) {
-      if (file === RELEASE) continue
+      if (MAY_ELEVATE.includes(file)) continue
       const source = withoutComments(read(file))
       const writes = source.match(/^\s*[a-z-]+:\s*write\b/gm) ?? []
       expect(writes, `${file} asks for a write permission`).toEqual([])
+    }
+  })
+
+  it("keeps release-on-merge.yml's elevation scoped to its one job and to two scopes", () => {
+    const source = withoutComments(read(RELEASE_ON_MERGE))
+
+    // Top-level stays read, as everywhere else.
+    expect(source, "release-on-merge.yml's top-level permissions are not read-only").toMatch(
+      /^permissions:\n\s+contents: read\b/m,
+    )
+
+    const jobsAt = source.indexOf("\njobs:")
+    expect(jobsAt, "release-on-merge.yml declares no jobs").toBeGreaterThan(-1)
+
+    // Exactly the two it needs, and nothing that could reach the registry or a
+    // deployment on its own.
+    const writes = (source.match(/^\s+([a-z-]+):\s*write\b/gm) ?? []).map((line) =>
+      line.trim().replace(/:\s*write$/, ""),
+    )
+    expect(
+      [...writes].sort(),
+      "release-on-merge.yml asks for a write scope beyond pushing a tag and dispatching",
+    ).toEqual(["actions", "contents"])
+
+    for (const match of source.matchAll(/^\s+[a-z-]+:\s*write\b/gm)) {
+      expect(
+        match.index,
+        `release-on-merge.yml declares ${match[0].trim()} outside its job block`,
+      ).toBeGreaterThan(jobsAt)
     }
   })
 
@@ -625,12 +675,35 @@ describe("release safety", () => {
     })
   }
 
-  // Publishing is a live capability, not a blocked one: 0.1.0 went out through
-  // this file. What these assert is that it stays DELIBERATE — four independent
-  // things must line up before anything reaches the registry, and none of them
-  // is something an ordinary push or a merge can supply.
-
-  it("does not publish merely because code reached main", () => {
+  /**
+   * THE POLICY THIS SUITE PINS, AND HOW IT CHANGED.
+   *
+   * It used to read: four independent things must line up before anything
+   * reaches the registry, "and none of them is something an ordinary push or a
+   * merge can supply." That was true while a maintainer created the tag by hand
+   * and typed the dispatch inputs at the Actions UI.
+   *
+   * It is no longer true, and pretending otherwise would be worse than the
+   * change. `release-on-merge.yml` supplies the first three deliberately: a
+   * merge to main that carries a version with no tag yet IS the release
+   * decision, and it produces the tag and the dispatch that used to be typed.
+   *
+   * WHAT DID NOT CHANGE, and is what these assertions are now for:
+   *
+   *   - `release.yml` is still unreachable from a branch push. It runs on a
+   *     `v*` tag or a dispatch, and nothing else. The automation cannot skip a
+   *     gate by triggering it a different way, because there is no other way.
+   *   - The publish job is still gated on both inputs, so a tag push alone —
+   *     including one somebody pushes by hand — proves and stops.
+   *   - The `npm-publish` environment still stands between the dispatch and the
+   *     registry. That gate belongs to a person, and with the first three
+   *     automated it is now the only one that does.
+   *
+   * An ORDINARY merge still publishes nothing: `release-on-merge.yml` acts only
+   * when the version has moved, which the suite below asserts is the condition
+   * it actually reads.
+   */
+  it("cannot be triggered into publishing by a branch push", () => {
     const text = withoutComments(raw())
     expect(text).toMatch(/tags:\n\s*- "v\*"/)
     expect(text).toMatch(/workflow_dispatch:/)
@@ -995,6 +1068,143 @@ describe("release safety", () => {
     // whose `needs:` have already run them.
     expect(text, "release.yml executes the release-proof orchestrator").not.toMatch(
       /release-proof\.mjs[^\n]*--execute/,
+    )
+  })
+})
+
+describe("the merge that cuts the release", () => {
+  const raw = () => read(RELEASE_ON_MERGE)
+
+  it("watches main, and only main", () => {
+    const text = withoutComments(raw())
+    expect(text, "release-on-merge.yml does not trigger on a push to main").toMatch(
+      /on:\n\s+push:\n\s+branches:\n\s+- main\b/,
+    )
+    // A tag trigger here would be a loop: this file creates tags.
+    expect(text, "release-on-merge.yml also triggers on a tag").not.toMatch(/tags:/)
+    // Nothing about a fork's pull request may reach a job that can push a tag.
+    expect(text, "release-on-merge.yml triggers on a pull request").not.toMatch(
+      /pull_request(_target)?:/,
+    )
+  })
+
+  it("publishes nothing itself", () => {
+    /**
+     * The whole safety argument for this file is that it is a trigger, not a
+     * publisher. It holds no registry credential and cannot acquire one: no
+     * OIDC identity to exchange, no environment to publish from, no publish
+     * step. Everything that reaches the registry stays in release.yml, behind
+     * the gates the suite above pins.
+     */
+    const text = withoutComments(raw())
+    expect(text, "release-on-merge.yml runs a publish step").not.toMatch(/\bpublish\b\s+--/)
+    expect(text, "release-on-merge.yml asks for the OIDC identity a publish needs").not.toMatch(
+      /id-token:\s*write/,
+    )
+    expect(text, "release-on-merge.yml binds itself to a deployment environment").not.toMatch(
+      /^\s+environment:/m,
+    )
+    expect(text, "release-on-merge.yml reads a repository secret").not.toMatch(/secrets\./)
+  })
+
+  it("acts only when the version has moved", () => {
+    /**
+     * THE PROPERTY THAT KEEPS AN ORDINARY MERGE HARMLESS, and it is a property
+     * of this file rather than of a branch name or a commit convention. The
+     * decision is "does a tag for the version in the tree already exist"; every
+     * step with a side effect is gated on the answer.
+     */
+    const text = withoutComments(raw())
+
+    expect(text, "the decision step does not look for an existing tag").toMatch(
+      /git rev-parse[^\n]*refs\/tags\//,
+    )
+    expect(text, "the decision is not published as a step output").toMatch(
+      /release=false[^\n]*GITHUB_OUTPUT|echo "release=false" >> "\$GITHUB_OUTPUT"/,
+    )
+
+    // Every step that writes something — the tag, the dispatch — carries the
+    // gate. A step that lost its `if:` would act on every merge to main.
+    const guarded = /if: steps\.decide\.outputs\.release == 'true'/g
+    const gates = text.match(guarded) ?? []
+    expect(
+      gates.length,
+      "fewer guarded steps than the four that must not run on an ordinary merge",
+    ).toBeGreaterThanOrEqual(4)
+
+    for (const step of ["Create and push the annotated tag", "Dispatch the release workflow"]) {
+      const at = text.indexOf(`- name: ${step}`)
+      expect(at, `release-on-merge.yml has no "${step}" step`).toBeGreaterThan(-1)
+      expect(
+        text.slice(at, at + 200),
+        `"${step}" is not gated on the version having moved`,
+      ).toMatch(guarded)
+    }
+  })
+
+  it("proves the version and the changelog before it creates the tag", () => {
+    /**
+     * Order matters more here than anywhere else in the pipeline. A tag is
+     * immutable in practice — it is what provenance resolves back to — so the
+     * checks that could refuse a release have to run BEFORE it exists, not
+     * after. A gate below the tag would leave a tag naming a release that never
+     * happened.
+     */
+    const text = withoutComments(raw())
+    const sync = text.indexOf("scripts/release-version-sync.mjs")
+    const changelog = text.indexOf("CHANGELOG.md")
+    const tag = text.indexOf("git tag -a")
+
+    expect(sync, "release-on-merge.yml never checks that the version sources agree")
+      .toBeGreaterThan(-1)
+    expect(changelog, "release-on-merge.yml never checks the changelog").toBeGreaterThan(-1)
+    expect(tag, "release-on-merge.yml creates no annotated tag").toBeGreaterThan(-1)
+
+    expect(sync, "the version-sources check runs after the tag is created").toBeLessThan(tag)
+    expect(changelog, "the changelog check runs after the tag is created").toBeLessThan(tag)
+  })
+
+  it("creates a tag and never moves one", () => {
+    const text = withoutComments(raw())
+    // Annotated, because that is what the release procedure has always created
+    // and what the tag object's date and author are read from.
+    expect(text, "the tag is lightweight").toMatch(/git tag -a\b/)
+    // A published version's tag is immutable. Force-pushing one would silently
+    // repoint what provenance resolves to.
+    expect(text, "release-on-merge.yml can force-update a tag").not.toMatch(
+      /git (tag|push)[^\n]*(--force|-f\b)/,
+    )
+    expect(text, "release-on-merge.yml can delete a tag").not.toMatch(/git (tag -d|push[^\n]*:refs)/)
+  })
+
+  it("dispatches release.yml with exactly the inputs that workflow demands", () => {
+    /**
+     * THE TYPO THIS CATCHES. `release.yml`'s publish job is gated on a literal
+     * phrase. A dispatch supplying anything else runs the proof tiers, reports
+     * green, and publishes nothing — the release simply does not happen, and it
+     * does not happen quietly. So the phrase is read out of release.yml rather
+     * than written twice.
+     */
+    const merge = withoutComments(raw())
+    const release = withoutComments(read(RELEASE))
+
+    const phrase = release.match(/inputs\.confirm == '([^']+)'/)?.[1]
+    expect(phrase, "release.yml declares no confirmation phrase to match").toBeTruthy()
+
+    expect(merge, "release-on-merge.yml does not dispatch release.yml").toMatch(
+      /gh workflow run release\.yml/,
+    )
+    expect(merge, "the dispatch does not opt in to publishing").toMatch(/-f publish=true/)
+    expect(
+      merge,
+      `the dispatch does not supply the phrase release.yml requires (${phrase})`,
+    ).toContain(`confirm='${phrase}'`)
+
+    // Against the tag it just created, not against main. release.yml's
+    // preflight refuses a non-tag ref, so this is what makes the dispatch
+    // reach the publish rather than fail at the first gate.
+    expect(merge, "the dispatch does not target the tag").toMatch(
+      /--ref "\$TAG"|--ref \$\{\{ steps\.decide\.outputs\.tag \}\}/,
     )
   })
 })

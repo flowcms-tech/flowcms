@@ -19,7 +19,8 @@ a pipeline becomes something people route around.
 |---|---|---|---|
 | **Pull request** | every PR, every push to `main` | `ci.yml`, `portability.yml`'s `unit` matrix, `docker.yml` (which always runs, but builds an image only when a Docker-relevant file changed) | minutes |
 | **Main** | push to `main`, nightly | `docker.yml`, `database-matrix.yml`, `consumer-proofs.yml`, `portability.yml` | tens of minutes |
-| **Release** | version tag, manual dispatch | `release.yml`, which calls all five of the above | the lot, plus the compose topology matrix and the package-manager matrix |
+| **Release** | version tag, dispatch | `release.yml`, which calls all five of the above | the lot, plus the compose topology matrix and the package-manager matrix |
+| **Release trigger** | push to `main` that moves `FLOWCMS_VERSION` | `release-on-merge.yml` | seconds — it tags and dispatches, and proves nothing itself |
 
 ### Depth is an input, never the caller's event
 
@@ -266,8 +267,8 @@ node scripts/verify-package-manager-matrix.mjs --managers pnpm,yarn,bun --no-doc
 
 ## Release gates — `release.yml`
 
-Triggered by a `v*` tag **push** or a manual dispatch — a tag created locally
-triggers nothing, so creating the tag and pushing it are separate steps. It **calls** `ci.yml`,
+Triggered by a `v*` tag **push** or a dispatch — a tag created locally triggers
+nothing, so creating the tag and pushing it are separate steps. It **calls** `ci.yml`,
 `database-matrix.yml` (with `topology: true`), `consumer-proofs.yml`,
 `docker.yml` and `portability.yml` (the last three with `full: true`) as
 reusable workflows rather than copying their job lists, so a gate cannot pass on
@@ -305,9 +306,44 @@ node scripts/release-proof.mjs --execute
 node scripts/release-proof.mjs --execute --with-docker
 ```
 
-`release.yml` deliberately contains no changelog logic, no version bumping and
-no tagging; the human release process is maintained separately by the
-maintainers.
+`release.yml` performs no version bumping and no tagging, and reads the
+changelog only to cut one section out of it for the release notes.
+
+## The release trigger — `release-on-merge.yml`
+
+A release is cut by **merging a pull request that moves the version**. That is
+the whole procedure; nothing is typed at the Actions UI and nothing is tagged by
+hand.
+
+Every push to `main` runs this workflow. It reads `FLOWCMS_VERSION` and asks
+one question: does a tag for that version already exist? If it does — which is
+the case for every merge that is not a release — the job stops, having done
+nothing. That is what makes the trigger the version bump itself rather than a
+branch name or a commit-message convention, and what makes a re-run harmless.
+
+When the tag is absent it checks that the version sources agree
+(`scripts/release-version-sync.mjs`) and that `CHANGELOG.md` carries a **dated**
+section for that version. Both run *before* the tag is created, because a tag is
+immutable in practice — it is what provenance resolves back to — so a check
+below it would leave a tag naming a release that never happened.
+
+Then it creates the annotated tag, pushes it, and dispatches `release.yml`
+against it with `publish: true` and the confirmation phrase.
+
+**Why a dispatch rather than letting the tag push trigger the release.** GitHub
+does not start a workflow run from an event created with the repository's own
+`GITHUB_TOKEN`, so a tag pushed from a workflow triggers nothing — silently.
+`workflow_dispatch` is one of the two documented exceptions, so it is the only
+path between the two files. The tag is still created, because the tag is what
+provenance and every consumer resolve back to; it is just not what starts the
+run.
+
+**What this workflow cannot do.** It holds no registry credential, declares no
+`id-token`, binds to no environment and runs no publish step. It can push a tag
+and start `release.yml`, and that is all. Every gate that stands between a
+dispatch and the registry is unchanged, including the `npm-publish`
+environment's required reviewer — which, with the tag and the dispatch
+automated, is the last point at which a release can be stopped.
 
 ### npm provenance
 
