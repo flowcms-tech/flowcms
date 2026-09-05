@@ -7,6 +7,132 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-09-05
+
+The release that makes the File Manager one thing. The dialog an editor opened
+from a form field was never a reduced File Manager — it was a second
+implementation of one, which is why it could not upload, create a folder,
+rename, move or delete. There is now a single browser behind both surfaces, so
+a feature added to it arrives in both at once, and the features added here
+prove it.
+
+### Added
+
+- **Image conversion**, from a file's action menu: pick a target format, a name
+  and a destination folder. WebP, AVIF, PNG and JPG. The result is a **new
+  object and the source is never modified or removed** — storage keys are this
+  application's foreign keys, held in eight columns and written into post
+  bodies, so a route that can only ever add cannot orphan a reference. The
+  route refuses a destination that would overwrite the source or a bystander,
+  the format a file already is comes back disabled, and a decode is bounded at
+  25 megapixels because a byte cap is not a pixel cap.
+
+- **Preview**, for images, opening the authenticated media route in a new tab.
+  The public image route would be wrong here: it serves a key only when
+  published content references it, so anything freshly uploaded would 404.
+
+- **A Properties dialog** for what a listing already carries — preview, name,
+  kind, size beside its exact byte count, location, path, admin URL,
+  modification time, and for images the dimensions measured off the decoded
+  preview. The stored MIME type, ETag and checksum are absent rather than
+  guessed: the storage driver exposes no head operation.
+
+- **Download**, as a real link, in the actions menu and in Properties.
+
+- **SVG and AVIF** as allowed image formats.
+
+### Changed
+
+- **The file picker is the File Manager.** `FileManagerModule` became
+  `FileManagerBrowser` and takes one optional `selection` prop; the admin page
+  and the new picker dialog are shells that render it and contain no
+  file-manager UI of their own. The picker therefore uploads, creates folders,
+  renames, moves and deletes, because there is no longer a second place for a
+  feature to be missing from. `ElementFileSelector` keeps its props exactly, so
+  all fifteen call sites and the TinyMCE toolbar button are untouched.
+
+- **`accept` governs what may be returned, never what is shown.** A folder
+  looks identical in both shells, files that cannot be chosen are dimmed rather
+  than hidden, and a file the picker will not accept can still be renamed or
+  moved from inside it.
+
+- **Rename and New Directory are forms, not confirmations.** They shared a
+  confirmation dialog wrapping a bare input, which gave them a warning triangle
+  no rename deserves and reported a refused name in a corner toast. They now
+  submit on Enter and show errors under the field. Renaming a file no longer
+  lets the extension be retyped: the field holds the stem and the extension is
+  a locked cell beside it.
+
+- **Directory tree.** Every visible row lists its own prefix, so a folder with
+  no subdirectories no longer offers an expander that opens onto nothing — one
+  request per rendered node in exchange for the answer, and for expansion
+  becoming instant. Rows carry their own vertical margin, so adjacent hover and
+  selection fills no longer read as one block.
+
+- **Shared components.** `ElementModal.Confirm` and `.Warning` render a close
+  button; the modal header's order is corrected for the app's fixed `dir="ltr"`
+  using logical properties; an `xl` size hosts a screen rather than a form; and
+  `onOpenAutoFocus` lets a form dialog claim the caret. `ElementTable` gains
+  `onRowClick` and `rowClassName`, with the checkbox and expander cells no
+  longer propagating a click. `ElementInput`'s addon variant shows a focus
+  state again.
+
+### Fixed
+
+- **The upload button did nothing after a file was chosen.** The handler
+  captured `e.target.files` and then reset the input to allow re-selecting the
+  same file; `input.files` is a live `FileList`, so the reset emptied it before
+  it was read and the handler bailed on the length check with no request and no
+  error. Drag-and-drop was unaffected.
+
+- A 3 GB file read as `3072.0 MB`. `formatBytes` had been copy-pasted into
+  three places; it lives once now and has the GB step.
+
+- The Upload button and the view toggle were 28px and 34px against each other.
+
+### Security
+
+- **SVG is served, and its execution removed.** Both media routes refused SVG
+  on purpose: it can carry `<script>`, event handlers and `<foreignObject>`, so
+  serving it as `image/svg+xml` from the admin origin was stored XSS with a
+  session attached. Handing it over as an attachment closed that at the cost of
+  making the format useless — a theme renders a logo with `<img>`. It is now
+  served inline under `default-src 'none'; style-src 'unsafe-inline'; sandbox`,
+  which puts the response in an opaque origin that can neither run a script nor
+  reach the network. Inline styles stay, because ordinary illustrations rely on
+  them.
+
+- The **public** image route is covered by this for the first time. Its
+  responses are anonymous and come from the site's own origin, where a
+  scriptable SVG would be stored XSS against every visitor rather than against
+  one administrator.
+
+- Both routes claimed in a comment that every allowed image extension has a
+  content-type entry, which is what makes their `application/octet-stream`
+  fallback unreachable. An invariant test now enforces it — adding two
+  extensions is exactly how that claim goes stale.
+
+- The conversion route is placed at `contributor`, with upload rather than with
+  rename and delete: it cannot break a published post, and a contributor could
+  already upload a converted copy by hand. The authorization matrix records the
+  entry and the reasoning beside it.
+
+### Known limitations
+
+- The SVG Content-Security-Policy is load-bearing, so a proxy that strips
+  response headers strips this protection with them. Entity-expansion denial of
+  service in an SVG parser is untouched, being a parsing concern rather than an
+  execution one.
+
+- GIF is not offered as a conversion target although the encoder can write one:
+  a single frame at 256 colours is a worse result than anything else on the
+  list, so accepting it would only let someone degrade an image by accident.
+  SVG is impossible as a target — nothing rebuilds a vector description from
+  pixels.
+
+- Conversion adds; it never replaces. Replacing an image in place needs
+  reference rewriting first, which is also the latent flaw in rename.
+
 ## [0.2.0] — 2026-09-01
 
 The release that makes storage a choice. FlowCMS required S3-compatible object
@@ -260,7 +386,8 @@ API, database and object storage, and no external backend.
   [`docs/distribution/create-flowcms.md`](docs/distribution/create-flowcms.md).
 - No release automation is wired up yet; see `docs/ci.md` when it lands.
 
-[Unreleased]: https://github.com/flowcms-tech/flowcms/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/flowcms-tech/flowcms/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/flowcms-tech/flowcms/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/flowcms-tech/flowcms/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/flowcms-tech/flowcms/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/flowcms-tech/flowcms/releases/tag/v0.1.0

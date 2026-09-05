@@ -13,4 +13,4 @@
  * declares a range this satisfies, so a bump that breaks the default theme
  * fails the suite rather than the website.
  */
-export const FLOWCMS_VERSION = "0.2.0"
+export const FLOWCMS_VERSION = "0.2.1"

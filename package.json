@@ -1,6 +1,6 @@
 {
   "name": "flowcms-app",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "FlowCMS — a self-hosted content management system: a public themed site plus an admin panel, with its own API, database and storage.",
   "license": "GPL-2.0-or-later",
