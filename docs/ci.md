@@ -20,6 +20,7 @@ a pipeline becomes something people route around.
 | **Pull request** | every PR, every push to `main` | `ci.yml`, `portability.yml`'s `unit` matrix, `docker.yml` (which always runs, but builds an image only when a Docker-relevant file changed) | minutes |
 | **Main** | push to `main`, nightly | `docker.yml`, `database-matrix.yml`, `consumer-proofs.yml`, `portability.yml` | tens of minutes |
 | **Release** | version tag, dispatch | `release.yml`, which calls all five of the above | the lot, plus the compose topology matrix and the package-manager matrix |
+| **Fast patch release** | dispatch with `fast: true` | `release.yml`, calling `ci.yml` alone | minutes — see [The two release paths](#the-two-release-paths) |
 | **Release trigger** | push to `main` that moves `FLOWCMS_VERSION` | `release-on-merge.yml` | seconds — it tags and dispatches, and proves nothing itself |
 
 ### Depth is an input, never the caller's event
@@ -284,6 +285,64 @@ repository is public, and both manifests carry `repository`. It fails
 closed on a visibility it cannot read. Removing it removes
 the only automated memory of why the publication order is what it is.
 
+### The two release paths
+
+A trivial patch — a string, a redirect, a one-line bug fix — used to pay the
+same fifteen to twenty minutes as a release that changed the schema. It no
+longer has to. `release.yml` takes a `fast` boolean input:
+
+| | Tiers that run | Roughly |
+|---|---|---|
+| **Full** (default) | `ci`, `databases`, `consumers`, `docker`, `portability` | 15–20 min |
+| **Fast** (`fast: true`) | `ci` alone — lockfile platform check, typecheck, lint, the whole vitest suite, artifact hygiene | minutes |
+
+**The publish side is identical on both.** The release-target preflight, the
+tag/version agreement, the registry immutability check, artifact hygiene
+immediately before `npm publish`, the OIDC exchange and the `npm-publish`
+environment's required reviewer are the same steps in the same order. A fast
+release is a *less-proved* publish, never a *less-gated* one — which is why the
+question this feature actually turns on is not "how do we go faster" but "which
+changes can we prove with the CI tier alone".
+
+**A tag push is unaffected.** On a `push` event the `inputs` context does not
+exist, so `!inputs.fast` reads true and every tier runs.
+
+#### What earns the fast path
+
+`release-on-merge.yml` runs `scripts/ci/decide-release-path.mjs` before it
+creates the tag. That script decides from git facts, not from anyone's sense of
+how small the change felt, and **all three** of these must hold:
+
+1. **Opt-in.** The merge commit carries a `Release-Path: fast` trailer. Never
+   inferred from the size of a diff — the person merging is the one who knows.
+   The trailer is read in trailer position only, so a commit message that
+   *describes* the mechanism does not accidentally invoke it.
+2. **A patch bump.** `X.Y.Z` → `X.Y.Z+1` against the previous tag. A minor bump
+   is precisely the release that withdraws the claim "the surface did not
+   change", so no trailer buys one a shallow proof.
+3. **A diff inside the low-risk set.** Every file changed since the previous tag
+   must be allowed. `src/`, `tests/`, `docs/`, `public/` and the top-level
+   markdown are; anything under `.github/`, `scripts/`, `packages/`, `src/db/`,
+   any `Dockerfile`, `compose.*`, lockfile, or build config is not, and each
+   refusal names the tier that would have covered it. The three version
+   manifests are allowed only when their diff touches the version line and
+   nothing else — a dependency added in the same commit forces the full path.
+
+Any condition failing means the full path, with the reasons printed in the
+`release-on-merge` run summary. The list is an **allowlist**: a path the script
+has never heard of falls to the full path rather than through the gap.
+
+```bash
+node scripts/ci/decide-release-path.mjs
+```
+
+Run it locally to see which path the current `HEAD` would get, and why.
+
+`tests/ci/releasePath.test.ts` pins the decision; the `the two release paths`
+block in `tests/ci/workflowPolicy.test.ts` pins what the workflows do with it —
+including that the CI tier is never conditional, and that a skipped tier is
+still a failure on a full release.
+
 ### The release-proof plan, printed beside the tiers
 
 `scripts/release-proof.mjs` (Phase 8.5) is the canonical, ordered list of what a
@@ -327,8 +386,18 @@ section for that version. Both run *before* the tag is created, because a tag is
 immutable in practice — it is what provenance resolves back to — so a check
 below it would leave a tag naming a release that never happened.
 
+It also decides, before the tag exists, **which release path this merge earns** —
+`scripts/ci/decide-release-path.mjs`, described under [The two release
+paths](#the-two-release-paths). That decision is read-only and entirely separate
+from the release decision above: a bug in it can cost a release its deep tiers,
+but it can never cause a release. Every step with a side effect stays gated on
+whether the version moved.
+
 Then it creates the annotated tag, pushes it, and dispatches `release.yml`
-against it with `publish: true` and the confirmation phrase.
+against it with `publish: true`, the confirmation phrase, and `fast` set to
+whichever path was chosen. `fast` is passed explicitly on every dispatch, true
+or false: an omitted boolean would take `release.yml`'s declared default, and a
+default changed there would silently change what the dispatch means.
 
 **Why a dispatch rather than letting the tag push trigger the release.** GitHub
 does not start a workflow run from an event created with the repository's own
@@ -390,6 +459,12 @@ things lining up, and no ordinary push or merge can supply any of them.
    mis-click.
 4. **The `npm-publish` GitHub environment**, which is where required reviewers
    belong — the one gate that is a person rather than a file.
+
+**The fast patch path does not touch any of those four.** It changes how many
+proof *tiers* run before the publish job, and nothing else; every gate listed
+above, and every fail-closed check in the publish job itself, applies to a fast
+release exactly as it applies to a full one. See [The two release
+paths](#the-two-release-paths).
 
 Then, per package, `prepublishOnly` → `publish-guard.mjs` validates the licence,
 the repository metadata and the built artifacts before npm sends anything. Those

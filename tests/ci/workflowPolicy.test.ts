@@ -1254,6 +1254,209 @@ describe("the merge that cuts the release", () => {
   })
 })
 
+describe("the two release paths", () => {
+  /**
+   * A FAST RELEASE IS A LESS-PROVED PUBLISH, NOT A LESS-GATED ONE.
+   *
+   * `release.yml` runs five tiers; a fast patch release runs one of them. The
+   * shape that makes that defensible is narrow, and every assertion here pins
+   * one edge of it:
+   *
+   *   - the CI tier is unconditional on both paths;
+   *   - the other four are conditional on ONE input and nothing else;
+   *   - a skipped tier is still a failure on a full release;
+   *   - nothing on the publish side moved.
+   *
+   * `tests/ci/releasePath.test.ts` covers the decision itself — what earns the
+   * fast path. This file covers what the workflows do with the answer.
+   */
+  const release = () => withoutComments(read(RELEASE))
+  const merge = () => withoutComments(read(RELEASE_ON_MERGE))
+
+  /** The four tiers a fast release skips: the job name, and the file it calls. */
+  const DEEP_TIERS = [
+    { job: "databases", file: "database-matrix.yml" },
+    { job: "consumers", file: "consumer-proofs.yml" },
+    { job: "docker", file: "docker.yml" },
+    { job: "portability", file: "portability.yml" },
+  ] as const
+
+  /**
+   * One job's block, from its key to the next key at the same indent.
+   *
+   * Bounded rather than sliced by a character count: the assertions below are
+   * about which job carries an `if:`, and a fixed-width window either misses
+   * the line or runs into the next job and finds it there.
+   */
+  function jobBlock(source: string, name: string): string {
+    const at = source.indexOf(`\n  ${name}:`)
+    expect(at, `release.yml has no ${name} job`).toBeGreaterThan(-1)
+    const rest = source.slice(at + 1)
+    // Past this job's own key line, or the search below matches it at index 0.
+    const bodyAt = rest.indexOf("\n") + 1
+    const next = rest.slice(bodyAt).search(/^ {2}[a-z][a-z0-9-]*:/m)
+    return next === -1 ? rest : rest.slice(0, bodyAt + next)
+  }
+
+  it("declares the fast input as a boolean that defaults to off", () => {
+    const text = release()
+    const at = text.indexOf("fast:")
+    expect(at, "release.yml declares no fast input").toBeGreaterThan(-1)
+    const block = text.slice(at, at + 300)
+    expect(block, "the fast input is not a boolean").toMatch(/type: boolean/)
+    // OFF by default, so an omitted input and a hand-pushed tag both prove
+    // everything. A default of true would make the deep tiers opt-in.
+    expect(block, "the fast input defaults to on").toMatch(/default: false/)
+  })
+
+  it("never makes the CI tier conditional", () => {
+    /**
+     * The single load-bearing asymmetry. The CI tier carries the lockfile
+     * platform check, the typecheck, the lint, the whole vitest suite and
+     * artifact hygiene — it is the entire proof a fast release has, so no input
+     * may switch it off.
+     */
+    const job = jobBlock(release(), "ci")
+    expect(job, "the CI tier calls something other than ci.yml").toContain(
+      "./.github/workflows/ci.yml",
+    )
+    expect(job, "the CI tier is gated on something").not.toMatch(/^\s+if:/m)
+  })
+
+  it.each(DEEP_TIERS)("gates $file on the fast input, and on nothing else", ({ job, file }) => {
+    const block = jobBlock(release(), job)
+    expect(block, `the ${job} job does not call ${file}`).toContain(
+      `./.github/workflows/${file}`,
+    )
+
+    const conditions = block.match(/^\s+if:.*$/gm) ?? []
+    expect(conditions, `the ${job} job carries no condition at all`).toHaveLength(1)
+    expect(conditions[0], `${file} is gated on something other than the fast input`).toMatch(
+      /if:\s*\$\{\{\s*!inputs\.fast\s*\}\}/,
+    )
+  })
+
+  it("keeps a skipped tier a failure on a full release", () => {
+    /**
+     * THE REGRESSION THIS EXISTS FOR. Making four tiers skippable means
+     * `release-proof` can no longer rely on the implicit `success()` of its
+     * `needs` — it runs on `!cancelled()` instead. That is precisely the change
+     * that could turn "a depth input did not arrive" from a red run into a
+     * green one, which is the failure the pipeline was built to make visible.
+     * So the results check has to read the fast flag and treat a skip as
+     * acceptable only under it.
+     */
+    const job = jobBlock(release(), "release-proof")
+
+    expect(job, "release-proof cannot start after a skipped tier").toMatch(
+      /if:\s*\$\{\{\s*!cancelled\(\)\s*\}\}/,
+    )
+
+    // It reads every tier's result, so a tier that failed cannot be passed over
+    // by a job that now starts regardless.
+    for (const tier of ["ci", "databases", "consumers", "docker", "portability"]) {
+      expect(job, `release-proof does not read the ${tier} tier's result`).toContain(
+        `needs.${tier}.result`,
+      )
+    }
+
+    // And the asymmetry itself: a skip is tolerated only when fast is set.
+    expect(job, "release-proof does not distinguish a fast skip from a lost tier").toMatch(
+      /FAST.*=.*true/,
+    )
+    expect(job, "release-proof does not fail a skipped tier on a full release").toMatch(
+      /skipped on a full release/,
+    )
+  })
+
+  it("changes nothing on the publish side", () => {
+    /**
+     * The property that makes the fast path safe at all: it buys fewer PROOFS,
+     * never fewer GATES. Every one of these is a publish-job step or condition
+     * that must be reached identically on both paths.
+     */
+    const job = jobBlock(release(), "publish")
+
+    expect(job, "the publish job is no longer gated on both dispatch inputs").toMatch(
+      /if: \$\{\{ inputs\.publish && inputs\.confirm == '[^']+' \}\}/,
+    )
+    // The fast input must not appear anywhere in the publish job. A publish
+    // step that behaved differently on a fast release would make this a
+    // less-gated path rather than a less-proved one.
+    expect(job, "the publish job reads the fast input").not.toMatch(/inputs\.fast/)
+
+    for (const step of [
+      "RELEASE_PRECONDITIONS",
+      "Release-target preflight (fail-closed)",
+      "Artifact hygiene, immediately before publishing",
+      "Publish flowcms",
+      "Publish create-flowcms",
+    ]) {
+      expect(job, `the publish job lost its "${step}" step`).toContain(`- name: ${step}`)
+    }
+  })
+
+  it("is chosen from git facts, by a script, before the tag exists", () => {
+    /**
+     * The decision belongs in a file that can be tested, and it has to be made
+     * BEFORE the tag: a tag is immutable in practice, and a release that
+     * discovered its own path afterwards would have nothing to do about it.
+     */
+    const text = merge()
+    const decide = text.indexOf("scripts/ci/decide-release-path.mjs")
+    const tag = text.indexOf("git tag -a")
+    expect(decide, "release-on-merge.yml does not run the release-path script").toBeGreaterThan(-1)
+    expect(decide, "the path is decided after the tag is created").toBeLessThan(tag)
+
+    // The script exists and is a script, not a shell block inlined into YAML.
+    expect(
+      existsSync(join(ROOT, "scripts", "ci", "decide-release-path.mjs")),
+      "scripts/ci/decide-release-path.mjs is missing",
+    ).toBe(true)
+  })
+
+  it("passes the path explicitly on the dispatch", () => {
+    /**
+     * Explicitly on EVERY dispatch, true or false. An omitted boolean takes
+     * release.yml's declared default, so a default changed there would silently
+     * change what this dispatch means.
+     */
+    const text = merge()
+    expect(text, "the dispatch does not pass the fast input").toMatch(/-f fast=/)
+
+    // And the name matches what release.yml declares, so a rename cannot leave
+    // the dispatch passing an input nothing reads.
+    expect(release(), "release.yml declares no input named fast").toMatch(/^\s+fast:$/m)
+  })
+
+  it("cannot make a release happen, only make one cheaper", () => {
+    /**
+     * The path decision is read-only and separate from the release decision.
+     * Every step with a side effect stays gated on `steps.decide`, which asks
+     * only whether the version moved — so a bug in the path script can cost a
+     * release its deep tiers, but can never cause one.
+     */
+    const text = merge()
+    const at = text.indexOf("- name: Decide which release path this merge earns")
+    expect(at, "release-on-merge.yml has no path-decision step").toBeGreaterThan(-1)
+    // Bounded to this step: the next `- name:` is where it ends.
+    const after = text.slice(at + 1)
+    const nextStep = after.indexOf("- name:")
+    const decision = nextStep === -1 ? after : after.slice(0, nextStep)
+    expect(decision, "the path decision writes something").not.toMatch(/git (tag|push)/)
+    expect(decision, "the path decision dispatches something").not.toMatch(/gh workflow run/)
+
+    for (const name of ["Create and push the annotated tag", "Dispatch the release workflow"]) {
+      const stepAt = text.indexOf(`- name: ${name}`)
+      expect(stepAt, `release-on-merge.yml has no "${name}" step`).toBeGreaterThan(-1)
+      expect(
+        text.slice(stepAt, stepAt + 200),
+        `"${name}" is gated on the release path rather than on the version having moved`,
+      ).toMatch(/if: steps\.decide\.outputs\.release == 'true'/)
+    }
+  })
+})
+
 describe("depth is an input, never the caller's event", () => {
   /**
    * THE DEFECT THIS PINS.
