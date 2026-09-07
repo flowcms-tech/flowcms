@@ -7,6 +7,50 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-09-07
+
+A release about how FlowCMS is released. **There are no product or runtime
+behaviour changes in this version.** No application or runtime source changed —
+nothing under `src/`, no schema, no Dockerfile — so a site upgrading from 0.2.1
+gets the same behaviour it had.
+
+What did change is release and CI tooling, documentation, and version metadata.
+The published manifests necessarily carry 0.2.2, and built artifacts may embed
+that version or other build metadata, so the packages are not byte-identical to
+0.2.1 — they are behaviourally equivalent.
+
+### Added
+
+- **A fast patch release path.** `release.yml` takes a `fast` input that proves a
+  release with the CI tier alone rather than all five, for a patch whose diff
+  cannot reach what the other four cover. `scripts/ci/decide-release-path.mjs`
+  decides it from git facts — a `Release-Path: fast` trailer on the merge commit,
+  a bump of exactly one patch, and a diff inside an allowlist — and any one of
+  those absent means the full path. A fast release is a less-proved publish,
+  never a less-gated one: every gate between the dispatch and the registry is
+  unchanged.
+
+- **A release orchestrator.** `scripts/release-orchestrate.mjs` drives the
+  existing machinery through prepare, status and publish across two GitHub
+  accounts, and refuses to publish without an explicit confirmation phrase. It
+  derives its state from GitHub and npm rather than from a file beside the
+  repository, so an interrupted run is resumed by running the same command
+  again.
+
+### Changed
+
+- **Pull requests no longer all pay for Windows and macOS.** `portability.yml`
+  asks the same allowlist the fast release path uses whether a diff needs the OS
+  legs, and skips them when it does not. `Portability gate` still reports on
+  every run, so it stays safe to require; a failed classifier fails that gate
+  rather than quietly passing it.
+
+- **Merges to `main` now satisfy its ruleset instead of overriding it.** A
+  `Restrict updates` rule had made every merge require an administrator
+  override, which is why earlier merges carry no review. With it removed, the
+  review, code-owner, thread-resolution and status-check requirements bind for
+  the first time.
+
 ## [0.2.1] — 2026-09-05
 
 The release that makes the File Manager one thing. The dialog an editor opened

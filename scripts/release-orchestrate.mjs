@@ -47,11 +47,12 @@
  */
 
 import { execFileSync } from "node:child_process"
-import { readFileSync } from "node:fs"
+import { readFileSync, realpathSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { isPatchBump, needsDeepProof, VERSION_MANIFESTS } from "./ci/decide-release-path.mjs"
+import { readVersions } from "./release-version-sync.mjs"
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -555,17 +556,29 @@ function commandPrepare(repo, { version, mode }) {
   if (existing) git("checkout", "--quiet", branch)
   else git("checkout", "--quiet", "-b", branch, "origin/main")
 
+  // ONE OWNER FOR THE VERSION, AND THIS IS NOT IT.
+  //
+  // `release-version-sync.mjs` knows every file that carries the release
+  // number and how each one stores it: the runtime constant, both published
+  // manifests, the root manifest, both lockfile mirrors, and the derived
+  // template it regenerates afterwards. This step calls it and checks what it
+  // did. It does NOT parse or rewrite a manifest itself — a second
+  // implementation of "where the version lives" is a second thing to forget a
+  // file, which is exactly how the root manifest came to be missed.
   say(`  setting every version source to ${version}…`)
   run("node", ["scripts/release-version-sync.mjs", "--set", version])
 
-  // And they must agree AT THE TARGET afterwards.
+  // VERIFIED THROUGH THE SAME OWNER. `readVersions()` is that script's own
+  // reader, imported rather than re-derived, so a source added there is checked
+  // here without this file being edited at all.
   run("node", ["scripts/release-version-sync.mjs"])
-  if (currentVersion() !== version) fail(`after the bump the tree reads ${currentVersion()}, not ${version}`)
-  for (const manifest of VERSION_MANIFESTS) {
-    const text = readFileSync(join(ROOT, manifest), "utf8")
-    if (!text.includes(version)) fail(`${manifest} does not carry ${version} after the sync`)
+  const sources = readVersions()
+  const disagreeing = sources.filter((source) => source.version !== version)
+  if (disagreeing.length > 0) {
+    for (const source of disagreeing) say(`    ${source.path} reads ${source.version ?? "nothing"}`)
+    fail(`${disagreeing.length} version source(s) do not read ${version} after the sync`)
   }
-  say(`  all ${VERSION_MANIFESTS.length} version sources agree at ${version}`)
+  say(`  all ${sources.length} committed version sources agree at ${version}`)
 
   if (git("status", "--porcelain")) {
     git("commit", "-am", `Prepare FlowCMS ${version}`)
@@ -752,6 +765,28 @@ async function main() {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+/**
+ * Was this file run as the command, rather than imported?
+ *
+ * REAL PATHS ON BOTH SIDES, and macOS is why. There, a temporary directory is
+ * `/var/folders/…`, a symlink to `/private/var/folders/…`. Node resolves
+ * `import.meta.url` through the symlink but leaves `process.argv[1]` as typed,
+ * so a plain === compares two spellings of one file and reports false — the CLI
+ * silently does nothing and prints nothing. It cost a red macOS leg to find,
+ * which is the leg existing for exactly this.
+ */
+function invokedDirectly() {
+  const entry = process.argv[1]
+  if (!entry) return false
+  const real = (path) => {
+    try {
+      return realpathSync(path)
+    } catch {
+      return path
+    }
+  }
+  return real(entry) === real(fileURLToPath(import.meta.url))
+}
+if (invokedDirectly()) {
   main().catch((error) => fail(error?.message ?? String(error)))
 }
