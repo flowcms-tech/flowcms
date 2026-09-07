@@ -47,7 +47,7 @@
  */
 
 import { execFileSync } from "node:child_process"
-import { readFileSync } from "node:fs"
+import { readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -558,6 +558,43 @@ function commandPrepare(repo, { version, mode }) {
   say(`  setting every version source to ${version}…`)
   run("node", ["scripts/release-version-sync.mjs", "--set", version])
 
+  // THE ROOT MANIFEST AND ITS TWO LOCKFILE MIRRORS.
+  //
+  // `release-version-sync.mjs` deliberately leaves these alone, and says why:
+  // `flowcms-app` is private and nothing resolves its version. But
+  // `tests/packaging/versionAlignment.test.ts` requires the application's own
+  // version to equal FLOWCMS_VERSION — "the application IS FlowCMS" — and every
+  // release since 0.2.0 has moved them together; the 0.2.1 commit says so in as
+  // many words. Two files in this repository disagreeing about whether the root
+  // version matters is a real seam, and a release is where it tears.
+  //
+  // The number lives in three places: the manifest, and `version` and
+  // `packages[""].version` in the lockfile. Editing the manifest alone leaves
+  // the lockfile a version behind, which is the same defect one file down.
+  //
+  // WRITTEN HERE RATHER THAN BY `npm version`, for two reasons. Node 22 on
+  // Windows refuses to spawn `npm.cmd` without a shell (`spawnSync EINVAL`),
+  // and a release script that needs a shell to work on one platform is a
+  // release script that breaks on that platform. And parsing is exact: both
+  // files round-trip byte-identically through `JSON.stringify(…, null, 2)`,
+  // which is asserted below, so the diff is the version lines and nothing else.
+  say(`  setting the root manifest and its lockfile mirrors to ${version}…`)
+  for (const file of ["package.json", "package-lock.json"]) {
+    const path = join(ROOT, file)
+    const original = readFileSync(path, "utf8")
+    const parsed = JSON.parse(original)
+
+    // Refuse rather than reformat. If a future npm writes these differently,
+    // rewriting the whole file would bury one changed line in a total rewrite.
+    if (`${JSON.stringify(parsed, null, 2)}\n` !== original) {
+      fail(`${file} does not round-trip through JSON.stringify; refusing to rewrite it wholesale`)
+    }
+
+    parsed.version = version
+    if (parsed.packages?.[""]) parsed.packages[""].version = version
+    writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`)
+  }
+
   // THE DERIVED SOURCE, REBUILT BEFORE IT IS CHECKED.
   //
   // `packages/create-flowcms/template.json` carries `templateVersion`, and
@@ -577,7 +614,22 @@ function commandPrepare(repo, { version, mode }) {
     const text = readFileSync(join(ROOT, manifest), "utf8")
     if (!text.includes(version)) fail(`${manifest} does not carry ${version} after the sync`)
   }
-  say(`  all ${VERSION_MANIFESTS.length} version sources agree at ${version}`)
+
+  // The root manifest and BOTH lockfile mirrors, checked by parsing rather than
+  // by substring: a lockfile mentions a great many versions, and finding the
+  // string somewhere in it proves nothing about the two fields that matter.
+  const app = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"))
+  const lock = JSON.parse(readFileSync(join(ROOT, "package-lock.json"), "utf8"))
+  const roots = [
+    ["package.json version", app.version],
+    ["package-lock.json version", lock.version],
+    ['package-lock.json packages[""].version', lock.packages?.[""]?.version],
+  ]
+  for (const [what, found] of roots) {
+    if (found !== version) fail(`${what} reads ${found ?? "nothing"}, not ${version}`)
+  }
+
+  say(`  all ${VERSION_MANIFESTS.length + roots.length + 1} version sources agree at ${version}`)
 
   if (git("status", "--porcelain")) {
     git("commit", "-am", `Prepare FlowCMS ${version}`)
