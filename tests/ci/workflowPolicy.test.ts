@@ -1554,6 +1554,94 @@ describe("portability", () => {
     // stdin is a hang, not a question.
     expect(text).toMatch(/COREPACK_ENABLE_DOWNLOAD_PROMPT/)
   })
+
+  /**
+   * THE PULL-REQUEST GATE, AND WHY IT IS THE DANGEROUS KIND OF OPTIMISATION.
+   *
+   * `Portability gate` is a required check on main. Letting its legs skip on a
+   * cheap pull request is worth real minutes, and every way of getting it wrong
+   * fails OPEN — the gate reports green having proved nothing, which looks
+   * exactly like success at the only moment anybody reads it.
+   *
+   * Each assertion below guards one of those ways.
+   */
+  describe("the legs may skip, the gate may not", () => {
+    /** One job's block, from its key to the next key at the same indent. */
+    function jobBlock(name: string): string {
+      const text = source()
+      const at = text.indexOf(`\n  ${name}:`)
+      expect(at, `portability.yml has no ${name} job`).toBeGreaterThan(-1)
+      const rest = text.slice(at + 1)
+      const bodyAt = rest.indexOf("\n") + 1
+      const next = rest.slice(bodyAt).search(/^ {2}[a-z][a-z0-9-]*:/m)
+      return next === -1 ? rest : rest.slice(0, bodyAt + next)
+    }
+
+    it("asks the shared allowlist rather than a second path list", () => {
+      /**
+       * The rule that keeps this from becoming release policy in two places.
+       * `scripts/ci/decide-release-path.mjs` owns "which paths can the CI tier
+       * prove alone"; this workflow asks it, and does not re-state it.
+       */
+      const text = source()
+      expect(text, "portability.yml does not consult the shared classifier").toMatch(
+        /scripts\/ci\/decide-release-path\.mjs --pr-gate/,
+      )
+      // A path grep here would be the duplicate, and `src/db/` is the case two
+      // lists would eventually disagree about.
+      expect(text, "portability.yml carries its own path list").not.toMatch(/src\/db\//)
+    })
+
+    it("runs the classifier unconditionally", () => {
+      /**
+       * THE FAIL-OPEN BUG THIS PREVENTS. An `if:` on `changes` would look like
+       * an economy — it has nothing to say outside a pull request. But a
+       * SKIPPED job skips everything that `needs:` it, so `unit` would skip on
+       * a release too, and the gate would report green having run nothing.
+       */
+      expect(
+        jobBlock("changes"),
+        "the classifier is conditional, which would skip the legs it feeds",
+      ).not.toMatch(/^\s+if:/m)
+    })
+
+    it("gates the OS legs on the classification, and only on a pull request", () => {
+      const conditions = jobBlock("unit").match(/^\s+if:.*$/gm) ?? []
+      expect(conditions, "the unit matrix carries no single condition").toHaveLength(1)
+      expect(conditions[0], "the OS legs are not gated on the shared classification").toMatch(
+        /needs\.changes\.outputs\.deep == 'true'/,
+      )
+      // Everything that is not a pull request still proves everything, and
+      // `!= 'pull_request'` is the one event comparison that stays true for a
+      // caller — so a release is unaffected by this gating.
+      expect(conditions[0], "a non-PR trigger could skip the OS legs").toMatch(
+        /github\.event_name != 'pull_request'/,
+      )
+    })
+
+    it("keeps the classifier in the gate's needs, so a broken one fails closed", () => {
+      /**
+       * The hole the skip opens, and the one line that closes it. Without
+       * `changes` in `needs`, a failed classification leaves `unit` skipped and
+       * this gate green. With it, the failure reaches `join(needs.*.result)`.
+       */
+      const block = jobBlock("gate")
+      expect(block, "the gate does not depend on the classifier").toMatch(
+        /needs:\s*\[[^\]]*\bchanges\b[^\]]*\]/,
+      )
+      expect(block, "the gate stopped reporting on every run").toMatch(/if: always\(\)/)
+      expect(block, "the gate no longer fails on a failed job").toMatch(/\*failure\*/)
+    })
+
+    it("still reports when every leg skipped", () => {
+      // What makes it safe to require in the ruleset at all: a required check
+      // that sometimes does not run blocks its pull request forever.
+      expect(
+        jobBlock("gate"),
+        "the gate treats a skipped leg as a failure",
+      ).not.toMatch(/\*skipped\*/)
+    })
+  })
 })
 
 describe("the expensive gates are wired to something", () => {

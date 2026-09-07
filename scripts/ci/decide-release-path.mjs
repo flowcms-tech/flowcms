@@ -202,6 +202,43 @@ export function classifyPath(path, versionOnlyManifests = []) {
 }
 
 /**
+ * DOES THIS DIFF NEED THE DEEP TIERS? The one question both callers ask.
+ *
+ * Extracted so the allowlist has exactly one home. Two things consult it:
+ *
+ *   - `decideReleasePath` below, as the third of its three conditions.
+ *   - `portability.yml`'s `changes` job, which uses it to decide whether a pull
+ *     request has to pay for the Windows and macOS suites.
+ *
+ * They are not the same question and must not be collapsed into one: a release
+ * additionally demands an opt-in trailer and a patch bump, neither of which
+ * means anything for a pull request. What they share is precisely this — which
+ * PATHS the CI tier can prove on its own — and sharing it is what stops the
+ * list drifting into two lists that disagree about `src/db/`.
+ *
+ * Deep is the safe answer, so an empty or unknown diff returns deep.
+ *
+ * @param {readonly string[]} changedFiles
+ * @param {readonly string[]} [versionOnlyManifests]
+ * @returns {{ deep: boolean, reasons: string[] }}
+ */
+export function needsDeepProof(changedFiles = [], versionOnlyManifests = []) {
+  /** @type {string[]} */
+  const reasons = []
+
+  if (changedFiles.length === 0) {
+    reasons.push("no changed file could be determined, and an unknown diff is not a small one")
+  }
+
+  for (const path of changedFiles) {
+    const verdict = classifyPath(path, versionOnlyManifests)
+    if (!verdict.eligible && verdict.why) reasons.push(verdict.why)
+  }
+
+  return { deep: reasons.length > 0, reasons }
+}
+
+/**
  * THE DECISION. Pure: every git fact it needs is already an argument.
  *
  * Returns every blocker rather than the first one. A maintainer who typed the
@@ -243,14 +280,9 @@ export function decideReleasePath({
     )
   }
 
-  if (changedFiles.length === 0) {
-    blockers.push("no changed file could be determined, and an unknown diff is not a small one")
-  }
-
-  for (const path of changedFiles) {
-    const verdict = classifyPath(path, versionOnlyManifests)
-    if (!verdict.eligible) blockers.push(verdict.why)
-  }
+  // The third condition, delegated rather than repeated. `portability.yml` asks
+  // the same question of a pull request's diff, and one list is the whole point.
+  blockers.push(...needsDeepProof(changedFiles, versionOnlyManifests).reasons)
 
   return { fast: blockers.length === 0, blockers }
 }
@@ -298,22 +330,101 @@ function isVersionOnlyDiff(from, path) {
   )
 }
 
+/**
+ * The changed files between a base ref and HEAD, plus which version manifests
+ * moved only on their version line. Shared by both CLI modes so a pull request
+ * and a release classify an identical diff identically.
+ */
+function diffAgainst(from) {
+  const changedFiles = git("diff", "--name-only", `${from}...HEAD`)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const versionOnlyManifests = VERSION_MANIFESTS.filter(
+    (path) => changedFiles.includes(path) && isVersionOnlyDiff(from, path),
+  )
+  return { changedFiles, versionOnlyManifests }
+}
+
+/**
+ * `--pr-gate` — the question `portability.yml` asks before paying for the
+ * Windows and macOS suites.
+ *
+ * FAILS CLOSED THREE WAYS, and each of them is a real state rather than a
+ * defensive flourish:
+ *
+ *   - not a pull request (no base ref)     -> deep. A push to main, a release
+ *     and the nightly all prove everything, which is what they are for.
+ *   - the base ref will not resolve        -> deep. A shallow checkout or a
+ *     renamed branch must not be read as "nothing changed".
+ *   - anything thrown                      -> the process exits non-zero, the
+ *     job fails, and the gate that `needs:` it fails with it.
+ *
+ * It writes `deep`, never `fast`, so the absent output reads as the safe answer
+ * if the step is ever removed: `needs.changes.outputs.deep == 'true'` is false
+ * on an empty string, but the gate's own `needs` on this job is what catches
+ * that — see the comment above `Portability gate`.
+ */
+function prGate() {
+  const baseIndex = process.argv.indexOf("--base")
+  const base = baseIndex === -1 ? "" : (process.argv[baseIndex + 1] ?? "").trim()
+
+  /** @type {{ deep: boolean, reasons: string[] }} */
+  let verdict
+
+  if (!base) {
+    verdict = {
+      deep: true,
+      reasons: ["this is not a pull request, and every other trigger proves everything"],
+    }
+  } else if (!resolves(`origin/${base}`)) {
+    verdict = {
+      deep: true,
+      reasons: [`origin/${base} does not resolve, so the diff cannot be read and is not assumed small`],
+    }
+  } else {
+    const { changedFiles, versionOnlyManifests } = diffAgainst(`origin/${base}`)
+    verdict = needsDeepProof(changedFiles, versionOnlyManifests)
+    console.log(`changed: ${changedFiles.length} file(s) against origin/${base}`)
+    for (const path of changedFiles) console.log(`  ${path}`)
+  }
+
+  console.log(
+    verdict.deep
+      ? "deep proof REQUIRED — the portability legs will run"
+      : "deep proof not required — the portability legs may be skipped",
+  )
+  for (const reason of verdict.reasons) console.log(`  - ${reason}`)
+
+  if (process.env.GITHUB_OUTPUT) {
+    appendFileSync(process.env.GITHUB_OUTPUT, `deep=${verdict.deep}\n`)
+  }
+}
+
+/** Does this ref exist? Used to fail closed on a base that will not resolve. */
+function resolves(ref) {
+  try {
+    git("rev-parse", "--verify", "--quiet", `${ref}^{commit}`)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function main() {
+  if (process.argv.includes("--pr-gate")) return prGate()
+
   const version = readVersion()
   const previousTag = previousReleaseTag()
   const commitMessage = git("log", "-1", "--format=%B", "HEAD")
 
-  let changedFiles = []
-  let versionOnlyManifests = []
-  if (previousTag) {
-    changedFiles = git("diff", "--name-only", `${previousTag}..HEAD`)
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-    versionOnlyManifests = VERSION_MANIFESTS.filter(
-      (path) => changedFiles.includes(path) && isVersionOnlyDiff(previousTag, path),
-    )
-  }
+  // The same diff helper the pull-request gate uses, so the two modes cannot
+  // classify the same change differently. The previous tag is an ancestor of
+  // HEAD on main, which makes the three-dot range identical to the two-dot one
+  // here and correct for the merge-base case there.
+  const { changedFiles, versionOnlyManifests } = previousTag
+    ? diffAgainst(previousTag)
+    : { changedFiles: [], versionOnlyManifests: [] }
 
   const { fast, blockers } = decideReleasePath({
     version,

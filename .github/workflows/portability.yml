@@ -79,6 +79,49 @@ env:
 
 jobs:
   # -------------------------------------------------------------------------
+  # DOES THIS PULL REQUEST HAVE TO PAY FOR WINDOWS AND macOS?
+  #
+  # `Portability gate` is a REQUIRED check on main, and the two runner classes
+  # behind it are the slowest GitHub offers. That combination made every
+  # one-line fix wait for them. This job is what lets a pull request whose diff
+  # the CI tier can prove on its own skip the legs and still report the gate.
+  #
+  # THE ANSWER COMES FROM THE SHARED ALLOWLIST, not from a path list written
+  # here. `scripts/ci/decide-release-path.mjs` already owns "which paths can the
+  # CI tier prove alone" for the fast release path; `--pr-gate` asks that same
+  # question of a pull request's diff. Two lists that could disagree about
+  # `src/db/` is exactly the failure worth spending a job to avoid.
+  #
+  # IT RUNS UNCONDITIONALLY, AND THAT IS LOAD-BEARING. Giving this job an `if:`
+  # would be the obvious economy — it has nothing to say outside a pull request.
+  # It is also a fail-open bug: a SKIPPED job skips everything that `needs:` it,
+  # so `unit` would skip on a release too, and `Portability gate` would report
+  # green having proved nothing. The job is cheap; the shortcut is not.
+  # -------------------------------------------------------------------------
+  changes:
+    name: Changes that need the portability legs
+    runs-on: ubuntu-24.04
+    outputs:
+      deep: ${{ steps.classify.outputs.deep }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The merge base is what the diff is taken against; a shallow checkout
+          # cannot find it, and the script refuses rather than guessing.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # No `npm ci`. The script imports nothing outside node: builtins, which is
+      # what keeps this job seconds rather than minutes — the whole point of it.
+      - id: classify
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: node scripts/ci/decide-release-path.mjs --pr-gate --base "$BASE_REF"
+
+  # -------------------------------------------------------------------------
   # The cheap OS gate, and the only portability job on a pull request.
   #
   # Ubuntu is NOT in this matrix: ci.yml's `test` job is the Linux leg and runs
@@ -95,6 +138,15 @@ jobs:
   unit:
     name: Suite — ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    needs: [changes]
+    # ON A PULL REQUEST, only when the diff needs it. Everywhere else — a push
+    # to main, the nightly, a dispatch, and every release, which reports the
+    # CALLER's event and so is never `pull_request` — this runs unconditionally.
+    #
+    # `!= 'pull_request'` is the one event comparison the CI policy suite
+    # permits, precisely because it stays true for a caller. Comparing against
+    # `push` or `workflow_dispatch` is what silently disarms a release.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.deep == 'true' }}
     strategy:
       # The point of two runners is to see both results. `fail-fast: true`
       # would cancel macOS the moment Windows failed, which is precisely when
@@ -229,10 +281,22 @@ jobs:
           done
 
   # -------------------------------------------------------------------------
+  # THE REQUIRED CHECK, and the only job in this file that main's ruleset names.
+  #
+  # It reports on every pull request whatever the legs did, which is what lets
+  # them be skipped at all: a required check that sometimes does not run blocks
+  # its pull request forever. A SKIPPED leg passing here is deliberate, and is
+  # the case this file was reshaped around.
+  #
+  # `changes` IS IN `needs:` FOR ONE REASON — to close the hole that skip opens.
+  # A failed classifier would otherwise leave `unit` skipped and this gate
+  # green, reporting that portability held when nothing had asked it. Listed
+  # here, its failure arrives in `join(needs.*.result)` and takes this job down
+  # with it. Removing it from `needs` makes the fast path fail OPEN.
   gate:
     name: Portability gate
     runs-on: ubuntu-24.04
-    needs: [unit, scaffold, package-managers]
+    needs: [changes, unit, scaffold, package-managers]
     if: always()
     steps:
       - name: Fail if a portability job failed
