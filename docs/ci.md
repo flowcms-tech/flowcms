@@ -835,3 +835,5 @@ of them as evidence the design is wrong:
 - `docs/distribution/create-flowcms.md` — the scaffolder and what it generates
 - `docs/distribution/package-managers.md` — the support levels `portability.yml`
   exists to move
+
+<!-- permission probe: safe to delete -->
