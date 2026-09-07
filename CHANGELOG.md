@@ -7,6 +7,45 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-09-07
+
+A release about how FlowCMS is released. Nothing that reaches a site changed:
+`src/`, both published packages and the image are identical to 0.2.1. The whole
+of this version is the pipeline that cuts releases learning to cost less and to
+refuse more.
+
+### Added
+
+- **A fast patch release path.** `release.yml` takes a `fast` input that proves a
+  release with the CI tier alone rather than all five, for a patch whose diff
+  cannot reach what the other four cover. `scripts/ci/decide-release-path.mjs`
+  decides it from git facts — a `Release-Path: fast` trailer on the merge commit,
+  a bump of exactly one patch, and a diff inside an allowlist — and any one of
+  those absent means the full path. A fast release is a less-proved publish,
+  never a less-gated one: every gate between the dispatch and the registry is
+  unchanged.
+
+- **A release orchestrator.** `scripts/release-orchestrate.mjs` drives the
+  existing machinery through prepare, status and publish across two GitHub
+  accounts, and refuses to publish without an explicit confirmation phrase. It
+  derives its state from GitHub and npm rather than from a file beside the
+  repository, so an interrupted run is resumed by running the same command
+  again.
+
+### Changed
+
+- **Pull requests no longer all pay for Windows and macOS.** `portability.yml`
+  asks the same allowlist the fast release path uses whether a diff needs the OS
+  legs, and skips them when it does not. `Portability gate` still reports on
+  every run, so it stays safe to require; a failed classifier fails that gate
+  rather than quietly passing it.
+
+- **Merges to `main` now satisfy its ruleset instead of overriding it.** A
+  `Restrict updates` rule had made every merge require an administrator
+  override, which is why earlier merges carry no review. With it removed, the
+  review, code-owner, thread-resolution and status-check requirements bind for
+  the first time.
+
 ## [0.2.1] — 2026-09-05
 
 The release that makes the File Manager one thing. The dialog an editor opened
