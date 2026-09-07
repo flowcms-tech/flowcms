@@ -421,6 +421,100 @@ node scripts/release-proof.mjs --execute --with-docker
 `release.yml` performs no version bumping and no tagging, and reads the
 changelog only to cut one section out of it for the release notes.
 
+## Cutting a release — `scripts/release-orchestrate.mjs`
+
+The orchestrator releases nothing itself. It drives the machinery on this page:
+`release-version-sync.mjs` bumps the three version sources,
+`release-on-merge.yml` turns the merge into a tag and a dispatch, `release.yml`
+proves and publishes, and `decide-release-path.mjs` decides which proof runs. It
+adds no workflow and changes no repository setting.
+
+What it adds is the part that used to be a person with two browser tabs: the
+two-identity dance, the waiting, and the checks nobody performs reliably late at
+night.
+
+```bash
+npm run release:prepare -- --version 0.2.2 [--mode fast|full]
+npm run release:status
+npm run release:publish -- --confirm "PUBLISH FLOWCMS" [--pause-before-deploy]
+```
+
+### Two identities, never a global switch
+
+| Account | Does |
+|---|---|
+| `mbehzad-bhz` | branches, bumps, commits, pushes, opens the pull request — everything reversible |
+| `flowcms-tech` | the CODEOWNER and `npm-publish` reviewer: submits the approval, merges, releases the deployment |
+
+`gh auth switch` is never called. Every `flowcms-tech` action passes `GH_TOKEN`
+for a single process, so identity is an argument rather than ambient state and an
+interrupted run cannot strand the wrong account active.
+
+### Only one command can do anything irreversible
+
+`prepare` holds no path to approve, merge or publish. `publish` refuses without
+the exact phrase `release.yml` itself demands — **a pull request existing, and
+its checks going green, is not an instruction to publish.** That split is the
+whole safety argument; the confirmation is the same phrase rather than a second
+one, because a second phrase is one more thing to get wrong at the only moment it
+matters.
+
+### The state machine
+
+State is derived from the world — GitHub and npm — and never from a file beside
+the repository, so an interrupted run is resumed by running the same command
+again.
+
+```
+IDLE ─prepare─▶ PR_OPEN ─┤ publish --confirm ├─▶ APPROVED ─▶ MERGED
+                                                               │
+                                    release-on-merge.yml ──────┤
+                                                               ▼
+                                                            TAGGED
+                                                               │
+                                       release.yml tiers ──────┤
+                                                               ▼
+                                                     AWAITING_APPROVAL
+                                                               │
+                              approve deployment (flowcms-tech)┤
+                                                               ▼
+                                              PUBLISHING ─▶ PUBLISHED
+```
+
+Each state is probed newest-first, so the furthest fact wins: a published
+release cannot be dragged backwards into merging again by a stale pull-request
+record.
+
+### The two gates, and why they differ
+
+**Before the approval:** required checks green, zero unresolved review threads,
+not draft, not conflicted, not behind. It deliberately does **not** demand
+`mergeStateStatus: CLEAN` — main's ruleset holds every pull request at `BLOCKED`
+until an approval exists, so requiring CLEAN there would make the approval
+unreachable and the tool inert.
+
+**Before the merge:** all of the above, plus a real non-dismissed `APPROVED`
+review from `flowcms-tech`, plus GitHub's own `CLEAN` verdict. `flowcms-tech` is
+an admin and *can* merge straight past the ruleset — pull request #13 was merged
+with no review at all. This gate is the refusal to use that.
+
+### Fast mode is predicted before the merge, not discovered after
+
+`--mode fast` puts `Release-Path: fast` in the **merge commit body**, which is
+where `decide-release-path.mjs` reads it from (`git log -1 HEAD` on main). A
+trailer written into a branch commit is invisible and the release silently runs
+full.
+
+Before merging, the orchestrator runs the same classifier over the predicted
+post-merge diff and reports the verdict. That matters because eligibility is
+judged over **everything since the previous tag**, not just this release's own
+change: one unrelated merge that touched `scripts/` makes the next release full
+however it is labelled. Predicting it is the difference between choosing the full
+path and being surprised by it after the tag already exists.
+
+`tests/release/orchestration.test.ts` pins the gates, the state derivation, the
+trailer placement and the changelog precondition.
+
 ## The release trigger — `release-on-merge.yml`
 
 A release is cut by **merging a pull request that moves the version**. That is

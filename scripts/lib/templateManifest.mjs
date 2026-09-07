@@ -148,6 +148,10 @@ export const EXCLUDE = [
   "scripts/verify-artifact-hygiene.mjs",
   "scripts/release-proof.mjs",
   "scripts/release-version-sync.mjs",
+  // The release operator. It drives THIS repository's two GitHub accounts, its
+  // `npm-publish` environment and its packages; in a generated project it would
+  // be a script pointing at somebody else's release.
+  "scripts/release-orchestrate.mjs",
 
   // THE LOCAL CORE DEVELOPMENT WORKFLOW — this repository only.
   //
@@ -230,6 +234,12 @@ export const DROPPED_SCRIPTS = {
   "db:seed": "development sample data; src/db/seed.ts is not shipped",
   "build:example-theme": "the example theme is not shipped",
   "build:template": "it builds create-flowcms's own template; the script is not shipped",
+  // The release operator drives THIS repository's two GitHub accounts, its
+  // npm-publish environment and its two packages. A generated project publishes
+  // none of that, and scripts/release-orchestrate.mjs is not shipped.
+  "release:prepare": "releasing FlowCMS is not something a generated site does",
+  "release:status": "same",
+  "release:publish": "same",
   // Generating migrations is FlowCMS development, not site operation, and there
   // is one command per dialect because there is one Drizzle config per dialect
   // (MariaDB shares the MySQL track). None of the three configs is shipped —

@@ -40,7 +40,10 @@
     "build:package": "node scripts/build-package.mjs",
     "build:example-theme": "node scripts/build-example-theme.mjs",
     "build:packages": "node scripts/build-package.mjs && node scripts/build-example-theme.mjs",
-    "build:template": "node scripts/build-create-flowcms.mjs"
+    "build:template": "node scripts/build-create-flowcms.mjs",
+    "release:prepare": "node scripts/release-orchestrate.mjs prepare",
+    "release:status": "node scripts/release-orchestrate.mjs status",
+    "release:publish": "node scripts/release-orchestrate.mjs publish"
   },
   "dependencies": {
     "@auth/core": "0.41.3",
