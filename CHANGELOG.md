@@ -9,10 +9,15 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.2.2] — 2026-09-07
 
-A release about how FlowCMS is released. Nothing that reaches a site changed:
-`src/`, both published packages and the image are identical to 0.2.1. The whole
-of this version is the pipeline that cuts releases learning to cost less and to
-refuse more.
+A release about how FlowCMS is released. **There are no product or runtime
+behaviour changes in this version.** No application or runtime source changed —
+nothing under `src/`, no schema, no Dockerfile — so a site upgrading from 0.2.1
+gets the same behaviour it had.
+
+What did change is release and CI tooling, documentation, and version metadata.
+The published manifests necessarily carry 0.2.2, and built artifacts may embed
+that version or other build metadata, so the packages are not byte-identical to
+0.2.1 — they are behaviourally equivalent.
 
 ### Added
 
