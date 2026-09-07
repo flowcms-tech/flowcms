@@ -82,43 +82,69 @@ describe("the gate before the approval", () => {
 })
 
 describe("the gate before the merge", () => {
-  const CLEAN = { ...READY, mergeStateStatus: "CLEAN" }
+  /**
+   * The state a ready pull request ACTUALLY reaches on this repository.
+   *
+   * `mergeStateStatus` stays BLOCKED even when everything is satisfied, because
+   * main's ruleset carries an `update` rule — only bypass actors may write to
+   * the ref at all. That is a statement about who may push, not about whether
+   * the rules are met, and `reviewDecision` is the one that answers the latter.
+   */
+  const READY_TO_MERGE = { ...READY, mergeStateStatus: "BLOCKED", reviewDecision: "APPROVED" }
   const APPROVED = [{ author: APPROVER, state: "APPROVED" }]
 
-  it("opens only once a real approval and a CLEAN verdict both exist", () => {
-    expect(mergeGate(CLEAN, APPROVED, REQUIRED)).toEqual({ ok: true, blockers: [] })
+  it("opens on a repository whose ref is update-restricted", () => {
+    /**
+     * THE DEFECT THIS PINS, found auditing the pull request that added this
+     * file. The gate used to require `mergeStateStatus: CLEAN`, which on this
+     * repository is never true — so the orchestrator would have refused every
+     * merge forever. Same inertness `approvalGate` avoids, one step later.
+     */
+    expect(mergeGate(READY_TO_MERGE, APPROVED, REQUIRED)).toEqual({ ok: true, blockers: [] })
   })
 
-  it("refuses to merge past the ruleset, however privileged the account", () => {
+  it("refuses to merge past the review rules, however privileged the account", () => {
     /**
-     * `flowcms-tech` is a repository admin and CAN merge a BLOCKED pull request
-     * — #13 was merged with no review at all. This is the refusal to use that
-     * power: GitHub's own verdict has to be CLEAN.
+     * `flowcms-tech` is a configured bypass actor (`bypass_mode: pull_request`)
+     * and CAN merge with nothing satisfied — #13 was merged with no review at
+     * all. This is the refusal to use that: GitHub's own reviewDecision has to
+     * say the requirements are met.
      */
-    const gate = mergeGate({ ...CLEAN, mergeStateStatus: "BLOCKED" }, APPROVED, REQUIRED)
-    expect(gate.ok).toBe(false)
-    expect(gate.blockers.join("\n")).toMatch(/refusing to merge past a rule/)
+    for (const reviewDecision of ["REVIEW_REQUIRED", "CHANGES_REQUESTED", undefined]) {
+      const gate = mergeGate({ ...READY_TO_MERGE, reviewDecision }, APPROVED, REQUIRED)
+      expect(gate.ok, `reviewDecision ${reviewDecision} was allowed to merge`).toBe(false)
+      expect(gate.blockers.join("\n")).toMatch(/review requirements are not met/)
+    }
   })
 
   it("refuses without an approval from the approver specifically", () => {
-    expect(mergeGate(CLEAN, [], REQUIRED).ok).toBe(false)
-    // An approval from the author is not the code owner's approval.
-    expect(mergeGate(CLEAN, [{ author: AUTHOR, state: "APPROVED" }], REQUIRED).ok).toBe(false)
+    expect(mergeGate(READY_TO_MERGE, [], REQUIRED).ok).toBe(false)
+    // An approval from the author is not the code owner's approval — and this
+    // is checked separately from reviewDecision on purpose, so that a ruleset
+    // relaxed in future cannot quietly drop the two-identity requirement.
+    expect(mergeGate(READY_TO_MERGE, [{ author: AUTHOR, state: "APPROVED" }], REQUIRED).ok).toBe(false)
   })
 
   it("refuses when the approver's latest review is not an approval", () => {
     // The caller reduces reviews to the LATEST per author, so a dismissed or
     // superseded approval arrives here as its replacement.
     for (const state of ["DISMISSED", "CHANGES_REQUESTED", "PENDING"]) {
-      const gate = mergeGate(CLEAN, [{ author: APPROVER, state }], REQUIRED)
+      const gate = mergeGate(READY_TO_MERGE, [{ author: APPROVER, state }], REQUIRED)
       expect(gate.ok, `a ${state} review counted as approval`).toBe(false)
     }
   })
 
+  it("still refuses a conflicted or stale branch", () => {
+    // DIRTY and BEHIND remain refusals: those are about the code, not about who
+    // may write to the ref.
+    expect(mergeGate({ ...READY_TO_MERGE, mergeStateStatus: "DIRTY" }, APPROVED, REQUIRED).ok).toBe(false)
+    expect(mergeGate({ ...READY_TO_MERGE, mergeStateStatus: "BEHIND" }, APPROVED, REQUIRED).ok).toBe(false)
+  })
+
   it("still enforces everything the approval gate did", () => {
-    expect(mergeGate({ ...CLEAN, unresolvedThreads: 1 }, APPROVED, REQUIRED).ok).toBe(false)
+    expect(mergeGate({ ...READY_TO_MERGE, unresolvedThreads: 1 }, APPROVED, REQUIRED).ok).toBe(false)
     expect(
-      mergeGate({ ...CLEAN, checks: [{ name: "CI gate", conclusion: "FAILURE" }] }, APPROVED, REQUIRED).ok,
+      mergeGate({ ...READY_TO_MERGE, checks: [{ name: "CI gate", conclusion: "FAILURE" }] }, APPROVED, REQUIRED).ok,
     ).toBe(false)
   })
 })

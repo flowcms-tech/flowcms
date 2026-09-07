@@ -191,12 +191,29 @@ export function approvalGate(pr, requiredChecks) {
  * THE GATE BEFORE THE MERGE. Everything above, plus the two things that only
  * become true afterwards.
  *
- * `flowcms-tech` is a repository admin and CAN merge straight past main's
- * ruleset — pull request #13 was merged with no review at all. This gate is the
- * refusal to use that: a real, non-dismissed approving review must exist, and
- * GitHub must independently agree the pull request is mergeable.
+ * `flowcms-tech` is a configured bypass actor on main's ruleset
+ * (`bypass_mode: pull_request`) and CAN merge with nothing satisfied — pull
+ * request #13 was merged with no review at all. This gate is the refusal to use
+ * that: a real, non-dismissed approving review must exist, and GitHub must
+ * independently agree the review rules are met.
  *
- * @param {Parameters<typeof approvalGate>[0]} pr
+ * WHY IT CHECKS `reviewDecision` AND NOT `mergeStateStatus: CLEAN`, which is
+ * the obvious thing to write and is wrong here.
+ *
+ * Main's ruleset carries an `update` rule — only bypass actors may update the
+ * ref at all. That makes `mergeStateStatus` PERMANENTLY `BLOCKED` on this
+ * repository, for every viewer, however green and approved a pull request is;
+ * it is a statement about who may write to the branch, not about whether the
+ * rules are satisfied. Gating on CLEAN therefore refuses every merge forever —
+ * the same class of inertness `approvalGate` avoids one step earlier, and it
+ * was caught auditing the pull request that introduced this file.
+ *
+ * `reviewDecision` is the verdict actually wanted: GitHub's own answer to
+ * "are the review requirements met", code owners included. Paired with the
+ * explicit approver check and everything `approvalGate` already demands, it
+ * refuses exactly what the CLEAN check was meant to refuse, and nothing else.
+ *
+ * @param {Parameters<typeof approvalGate>[0] & { reviewDecision?: string }} pr
  * @param {{ author: string, state: string }[]} reviews
  * @param {readonly string[]} requiredChecks
  * @returns {{ ok: boolean, blockers: string[] }}
@@ -209,11 +226,9 @@ export function mergeGate(pr, reviews, requiredChecks) {
   )
   if (!approved) blockers.push(`no current APPROVED review from ${APPROVER}`)
 
-  // CLEAN is GitHub's own verdict that every rule is satisfied. Anything else —
-  // BLOCKED most of all — means merging would be bypassing something.
-  if (pr.mergeStateStatus !== "CLEAN") {
+  if (pr.reviewDecision !== "APPROVED") {
     blockers.push(
-      `GitHub reports mergeStateStatus ${pr.mergeStateStatus}; refusing to merge past a rule`,
+      `GitHub reports reviewDecision ${pr.reviewDecision ?? "none"}; the review requirements are not met`,
     )
   }
 
@@ -364,7 +379,7 @@ function findPullRequest(repo, branch) {
 function pullRequestFacts(repo, number) {
   const pr = ghJson(
     "pr", "view", String(number), "--repo", repo,
-    "--json", "state,isDraft,mergeStateStatus,baseRefName,headRefName,statusCheckRollup,reviews,url",
+    "--json", "state,isDraft,mergeStateStatus,reviewDecision,baseRefName,headRefName,statusCheckRollup,reviews,url",
   )
 
   const query = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}`
@@ -381,6 +396,7 @@ function pullRequestFacts(repo, number) {
     isDraft: pr.isDraft,
     baseRefName: pr.baseRefName,
     mergeStateStatus: pr.mergeStateStatus,
+    reviewDecision: pr.reviewDecision,
     unresolvedThreads: threads.filter((t) => !t.isResolved).length,
     checks: (pr.statusCheckRollup ?? []).map((c) => ({
       name: c.name ?? c.context,

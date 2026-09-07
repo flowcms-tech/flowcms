@@ -494,9 +494,19 @@ until an approval exists, so requiring CLEAN there would make the approval
 unreachable and the tool inert.
 
 **Before the merge:** all of the above, plus a real non-dismissed `APPROVED`
-review from `flowcms-tech`, plus GitHub's own `CLEAN` verdict. `flowcms-tech` is
-an admin and *can* merge straight past the ruleset — pull request #13 was merged
-with no review at all. This gate is the refusal to use that.
+review from `flowcms-tech`, plus GitHub's own `reviewDecision: APPROVED`.
+`flowcms-tech` is a configured bypass actor on main's ruleset
+(`bypass_mode: pull_request`) and *can* merge with nothing satisfied — pull
+request #13 was merged with no review at all. This gate is the refusal to use
+that.
+
+It checks `reviewDecision` and **not** `mergeStateStatus: CLEAN`, which is the
+obvious thing to write and is wrong here. Main's ruleset carries an `update`
+rule — only bypass actors may write to the ref at all — which makes
+`mergeStateStatus` permanently `BLOCKED` on this repository, for every viewer,
+however green and approved a pull request is. It describes who may push, not
+whether the rules are met. Gating on `CLEAN` would refuse every merge forever.
+`DIRTY` and `BEHIND` are still refused, because those are about the code.
 
 ### Fast mode is predicted before the merge, not discovered after
 
