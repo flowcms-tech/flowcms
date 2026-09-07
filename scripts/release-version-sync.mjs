@@ -56,7 +56,7 @@
  */
 
 import { execFileSync } from "node:child_process"
-import { readFileSync, writeFileSync } from "node:fs"
+import { readFileSync, writeFileSync, realpathSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -378,4 +378,26 @@ function main() {
 
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main()
+/**
+ * Was this file run as the command, rather than imported?
+ *
+ * REAL PATHS ON BOTH SIDES, and macOS is why. There, a temporary directory is
+ * `/var/folders/…`, a symlink to `/private/var/folders/…`. Node resolves
+ * `import.meta.url` through the symlink but leaves `process.argv[1]` as typed,
+ * so a plain === compares two spellings of one file and reports false — the CLI
+ * silently does nothing and prints nothing. It cost a red macOS leg to find,
+ * which is the leg existing for exactly this.
+ */
+function invokedDirectly() {
+  const entry = process.argv[1]
+  if (!entry) return false
+  const real = (path) => {
+    try {
+      return realpathSync(path)
+    } catch {
+      return path
+    }
+  }
+  return real(entry) === real(fileURLToPath(import.meta.url))
+}
+if (invokedDirectly()) main()
