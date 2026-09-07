@@ -38,6 +38,23 @@
 # triggers a release is the version bump itself rather than a branch name, a
 # label, or a commit-message convention that a future merge could imitate by
 # accident.
+#
+# WHICH RELEASE PATH THE MERGE GETS. Separate decision, made after the one
+# above and unable to influence it. A release either happens or does not; this
+# only chooses how much is proved before it publishes.
+#
+#   full   every proof tier. 15-20 minutes. The default and the fallback.
+#   fast   the CI tier alone — lockfile, typecheck, lint, the whole vitest
+#          suite, artifact hygiene — for a patch that cannot reach anything the
+#          other tiers cover.
+#
+# `scripts/ci/decide-release-path.mjs` makes that call from git facts, not from
+# anybody's sense of how small the change felt: a `Release-Path: fast` trailer
+# on the merge commit, a version that moves by exactly one patch against the
+# previous tag, and a diff that stays inside an allowlist of paths the CI tier
+# covers. All three, or it is the full path, with the reason in the summary.
+# The publish-side gates in `release.yml` are identical on both paths, and the
+# `npm-publish` environment's reviewer still stands in front of the registry.
 # ---------------------------------------------------------------------------
 name: Release on merge
 
@@ -106,6 +123,24 @@ jobs:
           echo "${TAG} does not exist yet — this merge is the ${VERSION} release."
 
       # -----------------------------------------------------------------------
+      # WHICH PATH. Reads the tree and the git history, writes nothing, and
+      # cannot make a release happen — only make one cheaper.
+      #
+      # The full path is the default and the fallback. `decide-release-path.mjs`
+      # returns fast only for a merge that asked for it in a commit trailer, that
+      # moves the version by exactly one patch, and whose entire diff since the
+      # previous tag stays inside an allowlist of paths the CI tier covers.
+      # Anything it has not been taught about — a new top-level directory, a new
+      # config file — falls to the full path rather than through the gap.
+      #
+      # It runs UNGATED, on every push to main, because it is read-only and its
+      # report is useful on a merge that turns out not to be a release at all.
+      # -----------------------------------------------------------------------
+      - name: Decide which release path this merge earns
+        id: path
+        run: node scripts/ci/decide-release-path.mjs --github-output
+
+      # -----------------------------------------------------------------------
       # The gates, before the tag rather than after it. A tag is the one thing
       # here that must never be created wrongly: it is immutable in practice,
       # because a published version's tag is what provenance resolves back to.
@@ -166,27 +201,58 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.decide.outputs.tag }}
+          FAST: ${{ steps.path.outputs.fast }}
         run: |
           set -euo pipefail
+          # `fast` is passed EXPLICITLY on every dispatch, true or false, rather
+          # than being omitted when it does not apply. An omitted boolean input
+          # takes release.yml's declared default, which is what we want today —
+          # but a default that changed there would silently change what this
+          # dispatch means, and this is not a file where meaning should travel
+          # implicitly.
           gh workflow run release.yml \
             --ref "$TAG" \
             -f publish=true \
-            -f confirm='PUBLISH FLOWCMS'
-          echo "dispatched release.yml against ${TAG}."
-          echo "It runs the full proof tiers, then waits for the protected publish environment's reviewer."
+            -f confirm='PUBLISH FLOWCMS' \
+            -f fast="${FAST}"
+          echo "dispatched release.yml against ${TAG} with fast=${FAST}."
+          if [ "${FAST}" = "true" ]; then
+            echo "It runs the CI tier, then waits for the protected publish environment's reviewer."
+          else
+            echo "It runs the full proof tiers, then waits for the protected publish environment's reviewer."
+          fi
 
       - name: Summary
         if: always()
         env:
           TAG: ${{ steps.decide.outputs.tag }}
           RELEASING: ${{ steps.decide.outputs.release }}
+          FAST: ${{ steps.path.outputs.fast }}
+          REASON: ${{ steps.path.outputs.reason }}
         run: |
           {
             if [ "${RELEASING}" = "true" ]; then
               echo "## ${TAG} tagged and dispatched"
               echo ""
-              echo "The release workflow is running against \`${TAG}\`. It will stop at the"
-              echo "protected publish environment and wait for a reviewer to approve the deployment."
+              if [ "${FAST}" = "true" ]; then
+                echo "**Fast patch release.** The release workflow is running the CI tier only:"
+                echo "the lockfile platform check, the typecheck, the lint, the whole vitest"
+                echo "suite and artifact hygiene. The database matrix, the consumer proofs,"
+                echo "the Docker tier and the portability tier are skipped."
+                echo ""
+                echo "This merge qualified: it carries a \`Release-Path: fast\` trailer, it moves"
+                echo "the version by one patch, and every file it changed since the previous tag"
+                echo "is inside the low-risk set. Every publish-side gate still applies."
+              else
+                echo "**Full release.** The release workflow is running every proof tier."
+                echo ""
+                echo "The fast path was not taken because:"
+                echo ""
+                printf '%s\n' "${REASON}"
+              fi
+              echo ""
+              echo "It will stop at the protected publish environment and wait for a reviewer"
+              echo "to approve the deployment."
             else
               echo "## No release"
               echo ""
