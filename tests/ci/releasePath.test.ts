@@ -7,6 +7,7 @@ import {
   classifyPath,
   decideReleasePath,
   isPatchBump,
+  needsDeepProof,
 } from "../../scripts/ci/decide-release-path.mjs"
 
 /**
@@ -252,6 +253,78 @@ describe("the report", () => {
     expect(blockers.join("\n")).toMatch(/not a patch bump/)
     expect(blockers.join("\n")).toMatch(/Dockerfile/)
     expect(blockers.join("\n")).toMatch(/package-lock\.json/)
+  })
+})
+
+describe("the shared question both callers ask", () => {
+  /**
+   * `needsDeepProof` is the one place the allowlist is consulted. The fast
+   * release path uses it as the third of its three conditions; portability.yml's
+   * `changes` job uses it to decide whether a pull request pays for the Windows
+   * and macOS suites.
+   *
+   * The property worth pinning is that they cannot drift: the same diff has to
+   * produce the same verdict on both sides, because a second copy of this list
+   * that disagreed about `src/db/` is the whole failure being designed against.
+   */
+  it("says deep for exactly the diffs the release path refuses", () => {
+    const diffs = [
+      ["src/app/page.tsx", "CHANGELOG.md"],
+      ["src/db/schema.ts"],
+      ["Dockerfile"],
+      [".github/workflows/ci.yml"],
+      ["docs/ci.md", "README.md"],
+      ["terraform/main.tf"],
+      ["scripts/build-package.mjs"],
+    ]
+
+    for (const changedFiles of diffs) {
+      const { deep } = needsDeepProof(changedFiles)
+      // The release path with everything else satisfied: whatever remains is
+      // the diff verdict, so the two must agree.
+      const { fast } = decideReleasePath({
+        version: "0.2.2",
+        previousTag: "v0.2.1",
+        commitMessage: "Subject\n\nRelease-Path: fast\n",
+        changedFiles,
+        versionOnlyManifests: [],
+      })
+      expect(deep, `${changedFiles.join(", ")}: the two callers disagree`).toBe(!fast)
+    }
+  })
+
+  it("lets a small src change skip the portability legs", () => {
+    // The decision the fast PR gate exists to make. `src/` is proved by the
+    // Linux vitest suite and the typecheck, both in the CI tier.
+    expect(needsDeepProof(["src/Modules/Pages/actions.ts"]).deep).toBe(false)
+    expect(needsDeepProof(["src/app/page.tsx", "tests/seo/sitemap.test.ts"]).deep).toBe(false)
+  })
+
+  it("says deep for an empty diff", () => {
+    /**
+     * FAIL CLOSED. An empty diff is what a shallow checkout, a bad base ref or
+     * a broken range produces, and none of those mean "nothing changed". The
+     * portability legs run rather than being skipped on an unread diff.
+     */
+    const { deep, reasons } = needsDeepProof([])
+    expect(deep).toBe(true)
+    expect(reasons.join("\n")).toMatch(/no changed file/)
+  })
+
+  it("says deep as soon as one path in an otherwise small diff needs it", () => {
+    const { deep, reasons } = needsDeepProof([
+      "src/app/page.tsx",
+      "docs/ci.md",
+      "src/db/schema.ts",
+    ])
+    expect(deep).toBe(true)
+    expect(reasons).toHaveLength(1)
+    expect(reasons[0]).toMatch(/src\/db\/schema\.ts/)
+  })
+
+  it("honours the version-only exception the release path relies on", () => {
+    expect(needsDeepProof(VERSION_MANIFESTS, VERSION_MANIFESTS).deep).toBe(false)
+    expect(needsDeepProof(VERSION_MANIFESTS, []).deep).toBe(true)
   })
 })
 

@@ -17,7 +17,7 @@ a pipeline becomes something people route around.
 
 | Tier | Trigger | Workflows | Roughly |
 |---|---|---|---|
-| **Pull request** | every PR, every push to `main` | `ci.yml`, `portability.yml`'s `unit` matrix, `docker.yml` (which always runs, but builds an image only when a Docker-relevant file changed) | minutes |
+| **Pull request** | every PR, every push to `main` | `ci.yml`, `portability.yml`'s `unit` matrix (only when the diff needs it — see [Which pull requests pay for Windows and macOS](#which-pull-requests-pay-for-windows-and-macos)), `docker.yml` (which always runs, but builds an image only when a Docker-relevant file changed) | minutes |
 | **Main** | push to `main`, nightly | `docker.yml`, `database-matrix.yml`, `consumer-proofs.yml`, `portability.yml` | tens of minutes |
 | **Release** | version tag, dispatch | `release.yml`, which calls all five of the above | the lot, plus the compose topology matrix and the package-manager matrix |
 | **Fast patch release** | dispatch with `fast: true` | `release.yml`, calling `ci.yml` alone | minutes — see [The two release paths](#the-two-release-paths) |
@@ -54,8 +54,8 @@ unconditionally and adds an engine only when its `TEST_*_URL` is set, so the PR
 tier already covers the default topology at zero cost.
 
 **One more pull-request job lives elsewhere.** `portability.yml`'s `unit` matrix
-runs the same `npm test` on Windows and macOS on every pull request; the rest of
-that file is main-tier. See [`portability.yml`](#portabilityyml--windows-macos-and-the-other-three-package-managers).
+runs the same `npm test` on Windows and macOS — on the pull requests whose diff
+needs it, which is not all of them; the rest of that file is main-tier. See [`portability.yml`](#portabilityyml--windows-macos-and-the-other-three-package-managers).
 
 **No Docker build, usually.** `docker.yml` runs on every pull request, but its
 `image` job builds a container only when the `Dockerfile`, `docker/`, a compose
@@ -202,6 +202,58 @@ written design decision that Turbopack ignores `@source`. It does not. That is
 why the marker lives in a script with the reason attached rather than being
 retyped from memory into a workflow file.
 
+### Which pull requests pay for Windows and macOS
+
+`Portability gate` is a **required check** on `main`, and the two runner classes
+behind it are the slowest GitHub offers. Requiring it directly meant a one-line
+fix waited for Windows and macOS before it could merge.
+
+It no longer does. `portability.yml` gained a `changes` job that asks
+`scripts/ci/decide-release-path.mjs --pr-gate` whether the pull request's diff
+needs the OS legs, and `unit` runs only when the answer is yes:
+
+```yaml
+if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.deep == 'true' }}
+```
+
+**The allowlist is the same one the fast release path uses**, and deliberately
+so — see [What earns the fast path](#what-earns-the-fast-path). A change under
+`src/`, `tests/`, `docs/` or the top-level markdown skips the legs; anything
+under `.github/`, `scripts/`, `packages/`, `src/db/`, a `Dockerfile`, a compose
+file, a lockfile or build config runs them. One list, two callers, so the two
+cannot drift into disagreeing about `src/db/`. The release path adds its own
+extra conditions on top (a trailer, a patch bump); a pull request has neither,
+and asks only the path question.
+
+**The gate itself is untouched and still reports on every run.** That is what
+makes the skip safe: a required check that sometimes does not run leaves its
+pull request pending forever — the same reasoning that put `docker.yml`'s filter
+in a job rather than in its trigger.
+
+**It fails closed in four places**, which is most of the design:
+
+| Situation | Result |
+|---|---|
+| Not a pull request — push, nightly, dispatch, or `release.yml` calling in | legs run; the classifier short-circuits before touching git |
+| Base ref missing or unresolvable | legs run |
+| Diff reads as empty | legs run |
+| Classifier job **fails** | `changes` is in `Portability gate`'s `needs`, so the gate fails |
+
+That last row is the one worth keeping. Without `changes` in the gate's `needs`,
+a broken classifier would leave `unit` skipped and the gate green — reporting
+that portability held when nothing had asked it. `tests/ci/workflowPolicy.test.ts`
+fails if that dependency, the gate's `always()`, or the classifier's
+unconditional run is removed.
+
+**No ruleset change was needed.** `CI gate` and `Portability gate` remain the
+two required checks; the second one just stopped being slow.
+
+**What you give up:** a pure `src/` change no longer sees Windows and macOS
+*before* merge. `portability.yml` still runs unconditionally on the push to
+`main`, so a path-separator or CRLF break surfaces immediately after the merge
+rather than in the pull request. That is the trade the fast path buys, and it is
+the reason the allowlist is an allowlist.
+
 ### `portability.yml` — Windows, macOS, and the other three package managers
 
 Every other workflow runs on Linux with npm, because that is what the Docker
@@ -212,7 +264,8 @@ deliberately left unwritten.
 
 | Job | Runners | Tier | What it proves |
 |---|---|---|---|
-| `unit` | `windows-2022`, `macos-14` | pull request | `npm ci` then `npm test` — which builds both packages and the template first. A path separator, a case-insensitive filesystem or a CRLF checkout shows up here |
+| `changes` | `ubuntu-24.04` | always | asks `scripts/ci/decide-release-path.mjs --pr-gate` whether this diff needs the OS legs. Seconds, no install |
+| `unit` | `windows-2022`, `macos-14` | pull request, when `changes` says so | `npm ci` then `npm test` — which builds both packages and the template first. A path separator, a case-insensitive filesystem or a CRLF checkout shows up here |
 | `scaffold` | `windows-2022`, `macos-14` | main + nightly + release | `node scripts/verify-create-flowcms.mjs --no-docker` — pack, install the tarball outside the repository, run the installed bin, scaffold, install, build, typecheck, lint |
 | `package-managers` | `ubuntu-24.04` | nightly + release | `node scripts/verify-package-manager-matrix.mjs --managers pnpm,yarn,bun` — install the packed CLI, link the bin, forward arguments, scaffold, write exactly one lockfile, build, and build an image, once per manager |
 
