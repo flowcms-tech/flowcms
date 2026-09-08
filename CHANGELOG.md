@@ -7,6 +7,27 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-09-08
+
+A one-page patch. The admin root — `/admin`, or whatever `FLOWCMS_ADMIN_PATH`
+names — now lands a signed-in operator on the dashboard instead of the site's
+404 page.
+
+### Fixed
+
+- **The bare admin path no longer 404s for a signed-in user.** The proxy
+  rewrites the public admin root onto the internal App Router directory, and
+  that directory had no root page: the `(panel)` group and `login` were its
+  only children. An operator who typed, bookmarked or was linked to the admin
+  root therefore got the not-found page. Fresh installs never saw it, because
+  they arrive unauthenticated and the proxy's `authorized` callback sends them
+  to the login page before the rewrite happens — which is why the gap survived
+  every install-and-log-in walkthrough. A root page now redirects to the
+  dashboard, built from the configured admin path rather than spelled out, so a
+  relocated panel redirects to its own dashboard. Unauthenticated visitors are
+  handled exactly as before: login first, dashboard after.
+  Pinned by `tests/navigation/adminRootRedirect.test.ts`.
+
 ## [0.2.2] — 2026-09-07
 
 A release about how FlowCMS is released. **There are no product or runtime
@@ -430,7 +451,9 @@ API, database and object storage, and no external backend.
   [`docs/distribution/create-flowcms.md`](docs/distribution/create-flowcms.md).
 - No release automation is wired up yet; see `docs/ci.md` when it lands.
 
-[Unreleased]: https://github.com/flowcms-tech/flowcms/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/flowcms-tech/flowcms/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/flowcms-tech/flowcms/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/flowcms-tech/flowcms/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/flowcms-tech/flowcms/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/flowcms-tech/flowcms/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/flowcms-tech/flowcms/compare/v0.1.0...v0.1.1
