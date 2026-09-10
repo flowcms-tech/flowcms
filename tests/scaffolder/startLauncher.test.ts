@@ -112,7 +112,15 @@ describe("start migrates before it serves", () => {
     const result = run(START, project(), bareEnv())
     expect(result.status).toBe(1)
     expect(result.stderr).toContain("DATABASE_URL is required")
+    // O1: regression test — proves the production guard is called, not just resolveConfig
+    expect(result.stderr).toContain("DATABASE_URL=file:data/app.db")
     expect(result.stdout).not.toContain("FlowCMS: starting server")
+  })
+
+  it("production migration fails with the upgrade hint when DATABASE_URL is missing", () => {
+    const result = run(MIGRATE, project(), bareEnv({ NODE_ENV: "production" }))
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain("DATABASE_URL=file:data/app.db")
   })
 
   it("migrates in production mode, reading the files next start will read, then starts Next", async () => {
