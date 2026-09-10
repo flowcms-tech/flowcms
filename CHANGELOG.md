@@ -7,6 +7,16 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Type-checking a FlowCMS project needs about half the memory it did.** The
+  Search Console, Indexing and PageSpeed integrations imported the whole
+  `googleapis` package, whose type declarations cover all 328 Google APIs; the
+  three FlowCMS uses were a rounding error beside them. On a cold build that one
+  import pushed TypeScript past the ~2 GB default heap of a memory-limited
+  container. Each integration now imports only its own API.
+  Pinned by `tests/architecture/googleapisEntryPoints.test.ts`.
+
 ## [0.2.3] — 2026-09-08
 
 A one-page patch. The admin root — `/admin`, or whatever `FLOWCMS_ADMIN_PATH`

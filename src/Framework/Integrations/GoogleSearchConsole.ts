@@ -1,5 +1,9 @@
 import "server-only"
-import { google } from "googleapis"
+// The Search Console entry point, NOT the `googleapis` barrel: the barrel's
+// types cover all 328 Google APIs and were most of this project's type-check
+// memory. `auth` is the same AuthPlus the barrel exposes as `google.auth` —
+// tests/architecture/googleapisEntryPoints.test.ts pins that.
+import { auth as googleAuth, searchconsole as searchconsoleApi } from "googleapis/build/src/apis/searchconsole"
 
 /**
  * Read-write, not `webmasters.readonly`.
@@ -27,7 +31,7 @@ export interface GscOAuthCredentials {
 }
 
 export function buildOAuthClient({ clientId, clientSecret, redirectUri }: GscOAuthCredentials) {
-  return new google.auth.OAuth2(clientId, clientSecret, redirectUri)
+  return new googleAuth.OAuth2(clientId, clientSecret, redirectUri)
 }
 
 /**
@@ -77,7 +81,7 @@ export async function listSites(
   const client = buildOAuthClient(credentials)
   client.setCredentials({ refresh_token: refreshToken })
 
-  const searchconsole = google.searchconsole({ version: "v1", auth: client })
+  const searchconsole = searchconsoleApi({ version: "v1", auth: client })
   const res = await searchconsole.sites.list()
   return (res.data.siteEntry ?? []).map((entry) => ({
     siteUrl: entry.siteUrl ?? "",
@@ -146,7 +150,7 @@ export async function inspectUrl(
   const client = buildOAuthClient(credentials)
   client.setCredentials({ refresh_token: refreshToken })
 
-  const searchconsole = google.searchconsole({ version: "v1", auth: client })
+  const searchconsole = searchconsoleApi({ version: "v1", auth: client })
   const res = await searchconsole.urlInspection.index.inspect({
     requestBody: { inspectionUrl, siteUrl },
   })
@@ -232,7 +236,7 @@ export async function querySearchAnalytics(
   const client = buildOAuthClient(credentials)
   client.setCredentials({ refresh_token: refreshToken })
 
-  const searchconsole = google.searchconsole({ version: "v1", auth: client })
+  const searchconsole = searchconsoleApi({ version: "v1", auth: client })
   const res = await searchconsole.searchanalytics.query({
     siteUrl,
     requestBody: {
@@ -285,7 +289,7 @@ export async function submitSitemap(sitemapUrl: string): Promise<void> {
   })
   client.setCredentials({ refresh_token: config.refreshToken })
 
-  const searchconsole = google.searchconsole({ version: "v1", auth: client })
+  const searchconsole = searchconsoleApi({ version: "v1", auth: client })
   await searchconsole.sitemaps.submit({ siteUrl: config.siteUrl, feedpath: sitemapUrl })
 }
 
@@ -339,7 +343,7 @@ export async function listSitemaps(
   const client = buildOAuthClient(credentials)
   client.setCredentials({ refresh_token: refreshToken })
 
-  const searchconsole = google.searchconsole({ version: "v1", auth: client })
+  const searchconsole = searchconsoleApi({ version: "v1", auth: client })
   const res = await searchconsole.sitemaps.list({ siteUrl })
   return (res.data.sitemap ?? []).map(toGscSitemap)
 }
@@ -357,7 +361,7 @@ export async function submitSitemapPath(
   const client = buildOAuthClient(credentials)
   client.setCredentials({ refresh_token: refreshToken })
 
-  const searchconsole = google.searchconsole({ version: "v1", auth: client })
+  const searchconsole = searchconsoleApi({ version: "v1", auth: client })
   await searchconsole.sitemaps.submit({ siteUrl, feedpath })
 }
 
@@ -370,7 +374,7 @@ export async function deleteSitemap(
   const client = buildOAuthClient(credentials)
   client.setCredentials({ refresh_token: refreshToken })
 
-  const searchconsole = google.searchconsole({ version: "v1", auth: client })
+  const searchconsole = searchconsoleApi({ version: "v1", auth: client })
   await searchconsole.sitemaps.delete({ siteUrl, feedpath })
 }
 
