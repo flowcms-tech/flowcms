@@ -82,6 +82,32 @@ export const DEVELOPMENT_DATABASE_URL = "file:data/app.db"
 export const NEXT_BUILD_PHASE = "phase-production-build"
 
 /**
+ * The body of `databaseUrlFor`'s production refusal — the message text after
+ * `fail()`'s `Invalid database configuration: ` prefix.
+ *
+ * `scripts/migrate.mjs` cannot import this: it is plain ESM that has to run
+ * without a TypeScript loader inside the production container. It carries an
+ * IDENTICAL copy of this string, in `assertProductionDatabaseUrl`, and
+ * `tests/config/migrateParity.test.ts` pins the two together by calling both
+ * functions and comparing the thrown messages — the same duplication-with-a-
+ * test pattern `resolveConfig` already uses for the dialect/URL rules.
+ *
+ * It must name `DATABASE_URL=file:data/app.db` — the former IMPLICIT default,
+ * relative to the directory the server starts in — as the upgrade path for a
+ * deployment outside the official Docker image, and it must never say
+ * `file:/data/app.db`: that is the path the Docker image's own volume uses,
+ * and suggesting it to a non-Docker upgrader points them at an empty database.
+ */
+const PRODUCTION_DATABASE_URL_REQUIRED_MESSAGE =
+  "DATABASE_URL is required in production. Without it FlowCMS would open an empty SQLite " +
+  "file inside the container, which is deleted — with every post, setting and account in " +
+  "it — on the next redeploy. If you are upgrading a deployment outside the official Docker " +
+  "image that relied on FlowCMS's former default, set DATABASE_URL=file:data/app.db (the same " +
+  "path, relative to the directory the server starts in) to keep using that database. " +
+  "Otherwise set DATABASE_URL to postgresql://…, mysql://…, or a SQLite file on persistent " +
+  "storage, with DATABASE_DIALECT to match."
+
+/**
  * The URL to connect to: DATABASE_URL, or the development default where that is
  * harmless.
  *
@@ -101,12 +127,7 @@ export function databaseUrlFor(env: { DATABASE_URL?: string; NODE_ENV?: string; 
   if (url !== "") return url
 
   if (env.NODE_ENV === "production" && env.NEXT_PHASE !== NEXT_BUILD_PHASE) {
-    fail(
-      "DATABASE_URL is required in production. Without it FlowCMS would open an empty SQLite " +
-        "file inside the container, which is deleted — with every post, setting and account in " +
-        "it — on the next redeploy. Set DATABASE_URL (file:/data/app.db on a mounted volume, " +
-        "postgresql://…, or mysql://…) and DATABASE_DIALECT to match.",
-    )
+    fail(PRODUCTION_DATABASE_URL_REQUIRED_MESSAGE)
   }
   return DEVELOPMENT_DATABASE_URL
 }

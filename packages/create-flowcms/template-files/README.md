@@ -72,7 +72,7 @@ owner account and the site identity. That step needs `FLOWCMS_SETUP_TOKEN` set;
 | `npm start` | Apply pending migrations, then serve the production build |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | `tsc --noEmit` — run it after a build, which generates Next's types |
-| `npm run db:migrate` | Apply database migrations |
+| `npm run db:migrate` | Apply database migrations (`npm start` runs this automatically) |
 | `npm run db:bootstrap-owner` | Create the first owner without the web setup flow |
 
 ## The `packages/flowcms` directory

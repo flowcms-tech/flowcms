@@ -55,6 +55,43 @@ export function redactDatabaseUrl(url) {
   }
 }
 
+/**
+ * IDENTICAL, deliberately, to `PRODUCTION_DATABASE_URL_REQUIRED_MESSAGE` in
+ * `src/Framework/Config/databaseConfig.ts`. Duplicated rather than imported —
+ * this file runs inside the production container with no TypeScript loader —
+ * and `tests/config/migrateParity.test.ts` pins the two together by calling
+ * `assertProductionDatabaseUrl` and `databaseUrlFor` with the same input and
+ * comparing the thrown messages.
+ */
+const PRODUCTION_DATABASE_URL_REQUIRED_MESSAGE =
+  "DATABASE_URL is required in production. Without it FlowCMS would open an empty SQLite " +
+  "file inside the container, which is deleted — with every post, setting and account in " +
+  "it — on the next redeploy. If you are upgrading a deployment outside the official Docker " +
+  "image that relied on FlowCMS's former default, set DATABASE_URL=file:data/app.db (the same " +
+  "path, relative to the directory the server starts in) to keep using that database. " +
+  "Otherwise set DATABASE_URL to postgresql://…, mysql://…, or a SQLite file on persistent " +
+  "storage, with DATABASE_DIALECT to match."
+
+/**
+ * The same production refusal `databaseUrlFor` throws, but reached from the
+ * migrator — which `npm start` runs FIRST, so its message is the one an
+ * operator upgrading a bare `DATABASE_URL`-less deployment actually sees.
+ * `resolveConfig` itself keeps its existing generic message: its results are
+ * pinned by `tests/config/migrateParity.test.ts` with `toEqual` against
+ * `parseDatabaseConfig`, so this lives beside it rather than inside it.
+ *
+ * A no-op outside production, and a no-op once DATABASE_URL is set — including
+ * for plain `node scripts/migrate.mjs` / `npm run db:migrate` in development,
+ * where NODE_ENV is normally unset and the existing generic
+ * "DATABASE_URL is required" message is unchanged.
+ */
+export function assertProductionDatabaseUrl(env) {
+  const url = (env.DATABASE_URL ?? "").trim()
+  if (url === "" && env.NODE_ENV === "production") {
+    throw new Error(`Invalid database configuration: ${PRODUCTION_DATABASE_URL_REQUIRED_MESSAGE}`)
+  }
+}
+
 export function resolveConfig(env) {
   const url = (env.DATABASE_URL ?? "").trim()
   if (url === "") throw new Error("Invalid database configuration: DATABASE_URL is required")
@@ -167,6 +204,7 @@ export function loadProjectEnv(dir = process.cwd()) {
 
 async function main() {
   loadProjectEnv()
+  assertProductionDatabaseUrl(process.env)
   const config = resolveConfig(process.env)
   const folder = resolve(
     import.meta.dirname,

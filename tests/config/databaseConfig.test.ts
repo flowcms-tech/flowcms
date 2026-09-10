@@ -196,6 +196,25 @@ describe("databaseUrlFor", () => {
   it("names the phase Next actually sets during a build", () => {
     expect(NEXT_BUILD_PHASE).toBe(nextConstants.PHASE_PRODUCTION_BUILD)
   })
+
+  /**
+   * THE UPGRADE PATH for a deployment outside the official Docker image that
+   * relied on FlowCMS's former implicit default (`file:data/app.db`, relative
+   * to the working directory the server starts in). `file:/data/app.db` — the
+   * ABSOLUTE path the Docker image's own volume uses — is a DIFFERENT file:
+   * suggesting it to a non-Docker upgrader silently points them at an empty
+   * database instead of the one they already have.
+   */
+  it("tells a non-Docker upgrader to reuse file:data/app.db, and never suggests file:/data/app.db", () => {
+    try {
+      databaseUrlFor({ NODE_ENV: "production" })
+      throw new Error("expected a rejection")
+    } catch (error) {
+      const message = (error as Error).message
+      expect(message).toContain("DATABASE_URL=file:data/app.db")
+      expect(message).not.toContain("file:/data/app.db")
+    }
+  })
 })
 
 describe("the database client has no default of its own", () => {

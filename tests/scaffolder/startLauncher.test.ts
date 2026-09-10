@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -47,8 +48,29 @@ afterEach(() => {
   for (const dir of created.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-const run = (script: string, cwd: string, env: NodeJS.ProcessEnv) =>
-  spawnSync(process.execPath, [script], { cwd, env, encoding: "utf8", timeout: 60_000 })
+const run = (script: string, cwd: string, env: NodeJS.ProcessEnv, args: string[] = []) =>
+  spawnSync(process.execPath, [script, ...args], { cwd, env, encoding: "utf8", timeout: 60_000 })
+
+/**
+ * A free port, picked by asking the OS for one and closing it again — never
+ * 3000. `next start` binds its port "as fast as possible", before it checks
+ * whether a build even exists, so a production-mode test that omits `-p` binds
+ * 3000 regardless of whether the temp project it runs in has anything built.
+ * `start.mjs` forwards its argv to `next start` unchanged, so `-p <port>` here
+ * reaches it the same way `npm start -- -p 4000` would.
+ */
+function ephemeralPort(): Promise<number> {
+  return new Promise((resolvePort, reject) => {
+    const server = createServer()
+    server.unref()
+    server.on("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address()
+      const port = address && typeof address === "object" ? address.port : 0
+      server.close(() => resolvePort(port))
+    })
+  })
+}
 
 describe("db:migrate reads the project's .env the way Next does", () => {
   it("finds DATABASE_URL in .env", () => {
@@ -93,17 +115,40 @@ describe("start migrates before it serves", () => {
     expect(result.stdout).not.toContain("FlowCMS: starting server")
   })
 
-  it("migrates in production mode, reading the files next start will read, then starts Next", () => {
+  it("migrates in production mode, reading the files next start will read, then starts Next", async () => {
     const dir = project({
       ".env.production": "DATABASE_URL=file:./production.db\n",
       ".env.development": "DATABASE_URL=file:./development.db\n",
     })
-    const result = run(START, dir, bareEnv())
+    const port = await ephemeralPort()
+    const result = run(START, dir, bareEnv(), ["-p", String(port)])
     expect(existsSync(join(dir, "production.db")), result.stderr).toBe(true)
     expect(existsSync(join(dir, "development.db"))).toBe(false)
     // The temporary directory has no build, so Next itself exits non-zero —
     // what matters is that it was reached, after the migration.
     expect(result.stdout).toContain("FlowCMS: starting server")
     expect(result.status).not.toBe(0)
+  })
+
+  /**
+   * I2: the migrator and `next start` must agree on which `.env*` files are
+   * "production". `next start` always loads the production files — or the
+   * test files when NODE_ENV=test — no matter what else NODE_ENV says. Before
+   * this fix, `loadProjectEnv`'s `dev = process.env.NODE_ENV !== "production"`
+   * meant a shell that merely EXPORTED NODE_ENV=development (a common habit,
+   * not a request for the dev server) made the migrator read
+   * `.env.development` and migrate that database, while `next start` went on
+   * to serve the production one — unmigrated.
+   */
+  it("migrates the production database even when the shell already set NODE_ENV=development", async () => {
+    const dir = project({
+      ".env.production": "DATABASE_URL=file:./production.db\n",
+      ".env.development": "DATABASE_URL=file:./development.db\n",
+    })
+    const port = await ephemeralPort()
+    const result = run(START, dir, bareEnv({ NODE_ENV: "development" }), ["-p", String(port)])
+    expect(existsSync(join(dir, "production.db")), result.stderr).toBe(true)
+    expect(existsSync(join(dir, "development.db"))).toBe(false)
+    expect(result.stdout).toContain("FlowCMS: starting server")
   })
 })

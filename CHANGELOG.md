@@ -34,6 +34,8 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   runs the `start` script instead — never created its schema and reported
   `migrations_pending` indefinitely. `start` now runs the migrator first and
   does not start the server if it fails, exactly as the image does.
+  `create-flowcms`'s local-mode instructions no longer list `db:migrate` as a
+  step before `npm start`.
 - **`npm run db:migrate` reads the project's `.env` files.** It read only the
   shell environment, and npm loads no `.env` for a script, so the migration
   step create-flowcms prints for a local deployment failed with
@@ -52,6 +54,13 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   too. Development (`next dev`), tests and `next build` keep the SQLite
   default. The Docker image is unaffected: it always sets
   `DATABASE_URL=file:/data/app.db` on its volume.
+
+  If you deployed outside that image and relied on the old implicit default,
+  this does not orphan your database: set `DATABASE_URL=file:data/app.db` and
+  start the server from the same directory as before, and it reopens the same
+  file. (If that file lives in a container's writable layer, it is still lost
+  on the next redeploy regardless of this change — move it to persistent
+  storage.)
 
 ## [0.2.3] — 2026-09-08
 
