@@ -1,5 +1,12 @@
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
+import * as nextConstants from "next/constants"
 import { describe, expect, it } from "vitest"
 import {
+  DEVELOPMENT_DATABASE_URL,
+  NEXT_BUILD_PHASE,
+  databaseUrlFor,
   parseDatabaseConfig,
   redactDatabaseUrl,
   type DatabaseDialect,
@@ -137,5 +144,88 @@ describe("credential redaction", () => {
     } catch (error) {
       expect((error as Error).message).not.toContain("hunter2")
     }
+  })
+})
+
+/**
+ * WHERE THE URL COMES FROM — and the one place it must not come from.
+ *
+ * With DATABASE_URL unset the client used to open `file:data/app.db`. In a
+ * production container that file sits in the writable layer and is deleted, with
+ * every post, setting and account, on the next redeploy — while the site looked
+ * healthy. A production report found exactly that: a 0-byte app.db, and an
+ * operator who believed the site was on MySQL.
+ *
+ * The default survives where it is harmless: development, tests, and `next
+ * build`, which runs with NODE_ENV=production and evaluates the client to collect
+ * page data, with no database configured in either the Docker builder stage or
+ * CI.
+ */
+describe("databaseUrlFor", () => {
+  it.each([undefined, "development", "test", "production"])(
+    "uses DATABASE_URL whenever it is set (NODE_ENV=%s)",
+    (NODE_ENV) => {
+      expect(databaseUrlFor({ DATABASE_URL: PG_URL, NODE_ENV })).toBe(PG_URL)
+    },
+  )
+
+  it.each([undefined, "development", "test"])("defaults to SQLite for NODE_ENV=%s", (NODE_ENV) => {
+    expect(databaseUrlFor({ NODE_ENV })).toBe(DEVELOPMENT_DATABASE_URL)
+  })
+
+  it("defaults during next build, which has no database of its own", () => {
+    expect(databaseUrlFor({ NODE_ENV: "production", NEXT_PHASE: NEXT_BUILD_PHASE })).toBe(DEVELOPMENT_DATABASE_URL)
+  })
+
+  it("refuses to default while serving production", () => {
+    expect(() => databaseUrlFor({ NODE_ENV: "production" })).toThrow(/DATABASE_URL is required in production/)
+  })
+
+  it("refuses in production at runtime phases too", () => {
+    expect(() => databaseUrlFor({ NODE_ENV: "production", NEXT_PHASE: "phase-production-server" })).toThrow(
+      /DATABASE_URL is required in production/,
+    )
+  })
+
+  it("treats a blank DATABASE_URL as unset", () => {
+    expect(() => databaseUrlFor({ NODE_ENV: "production", DATABASE_URL: "   " })).toThrow(
+      /DATABASE_URL is required in production/,
+    )
+  })
+
+  it("names the phase Next actually sets during a build", () => {
+    expect(NEXT_BUILD_PHASE).toBe(nextConstants.PHASE_PRODUCTION_BUILD)
+  })
+
+  /**
+   * THE UPGRADE PATH for a deployment outside the official Docker image that
+   * relied on FlowCMS's former implicit default (`file:data/app.db`, relative
+   * to the working directory the server starts in). `file:/data/app.db` — the
+   * ABSOLUTE path the Docker image's own volume uses — is a DIFFERENT file:
+   * suggesting it to a non-Docker upgrader silently points them at an empty
+   * database instead of the one they already have.
+   */
+  it("tells a non-Docker upgrader to reuse file:data/app.db, and never suggests file:/data/app.db", () => {
+    try {
+      databaseUrlFor({ NODE_ENV: "production" })
+      throw new Error("expected a rejection")
+    } catch (error) {
+      const message = (error as Error).message
+      expect(message).toContain("DATABASE_URL=file:data/app.db")
+      expect(message).not.toContain("file:/data/app.db")
+    }
+  })
+})
+
+describe("the database client has no default of its own", () => {
+  const ROOT = fileURLToPath(new URL("../..", import.meta.url))
+  const client = readFileSync(join(ROOT, "src/db/client.ts"), "utf8")
+
+  it("takes its URL from databaseUrlFor", () => {
+    expect(client).toContain("databaseUrlFor(process.env)")
+  })
+
+  it("supplies no inline fallback", () => {
+    expect(client).not.toMatch(/DATABASE_URL\s*\?\?/)
   })
 })

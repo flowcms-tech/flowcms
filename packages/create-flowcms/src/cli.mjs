@@ -330,8 +330,9 @@ function report(io, reporter, path, config, { installed }) {
     lines.push("  uses, so no -f flags are needed. Migrations run at container start.")
   } else {
     lines.push(`  ${runScript("build:packages")}`)
-    lines.push(`  ${runScript("db:migrate")}`)
     lines.push(`  ${runScript("build")} && ${pm === "npm" ? "npm start" : runScript("start")}`)
+    lines.push(`      ^ ${pm === "npm" ? "npm start" : runScript("start")} applies pending migrations first`)
+    lines.push(`  (${runScript("dev")} does not migrate — run ${runScript("db:migrate")} before using it)`)
   }
 
   lines.push("")

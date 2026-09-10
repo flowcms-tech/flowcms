@@ -1,5 +1,6 @@
 import "server-only"
-import { google } from "googleapis"
+// The PageSpeed entry point, not the 328-API `googleapis` barrel — see GoogleSearchConsole.ts.
+import { pagespeedonline as pagespeedonlineApi } from "googleapis/build/src/apis/pagespeedonline"
 
 /**
  * Core Web Vitals come from PageSpeed Insights v5, not the Search Console
@@ -52,7 +53,7 @@ export async function runPageSpeed(
   url: string,
   strategy: "mobile" | "desktop"
 ): Promise<CwvResult> {
-  const pagespeedonline = google.pagespeedonline({ version: "v5" })
+  const pagespeedonline = pagespeedonlineApi({ version: "v5" })
   const res = await pagespeedonline.pagespeedapi.runpagespeed({
     url,
     strategy,

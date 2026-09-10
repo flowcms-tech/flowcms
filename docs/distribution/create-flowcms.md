@@ -322,8 +322,9 @@ Admin           →  everything after that
 
 No connectivity is probed — not the database, not S3, not Redis. Readiness and
 setup already own that question, and a second implementation would be a second
-answer. No migrations run during scaffolding; Docker runs them at container
-start.
+answer. No migrations run during scaffolding: Docker runs them at container
+start, and a local (non-Docker) project's `npm run start` applies pending
+migrations itself before it serves.
 
 No `--reconfigure`: changing deployment configuration after creation is editing
 `.env` and restarting.

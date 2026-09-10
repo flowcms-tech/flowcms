@@ -7,6 +7,61 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Type-checking a FlowCMS project needs about half the memory it did.** The
+  Search Console, Indexing and PageSpeed integrations imported the whole
+  `googleapis` package, whose type declarations cover all 328 Google APIs; the
+  three FlowCMS uses were a rounding error beside them. On a cold build that one
+  import pushed TypeScript past the ~2 GB default heap of a memory-limited
+  container. Each integration now imports only its own API.
+  Pinned by `tests/architecture/googleapisEntryPoints.test.ts`.
+
+- **`npm run build` no longer runs out of memory on buildpack platforms.** The
+  build script passed `--max-old-space-size=4096` on the command line, which
+  Next's TypeScript check never sees: it runs in a child process that inherits
+  the environment, not the parent's flags. The Dockerfile had compensated with
+  `ENV NODE_OPTIONS`, so image builds worked while Railpack, Nixpacks and every
+  buildpack died of a JavaScript heap out-of-memory error at about 2 GB. The
+  build now runs through `scripts/build.mjs`, which sets the ceiling in
+  `NODE_OPTIONS` for every build path, keeps existing `NODE_OPTIONS` entries,
+  caps the default below the container's memory limit, and accepts
+  `FLOWCMS_BUILD_HEAP_MB` as an override. The Dockerfile uses the same
+  launcher, so the ceiling is defined once.
+
+- **`npm run start` applies migrations before it serves.** Migrations ran only
+  in the Docker image's entrypoint, so a deployment built by a buildpack — which
+  runs the `start` script instead — never created its schema and reported
+  `migrations_pending` indefinitely. `start` now runs the migrator first and
+  does not start the server if it fails, exactly as the image does.
+  `create-flowcms`'s local-mode instructions no longer list `db:migrate` as a
+  step before `npm start`.
+- **`npm run db:migrate` reads the project's `.env` files.** It read only the
+  shell environment, and npm loads no `.env` for a script, so the migration
+  step create-flowcms prints for a local deployment failed with
+  "DATABASE_URL is required" while the server read the same file without
+  trouble. The migrator now loads `.env` files with Next's own loader: the same
+  files, the same precedence, and a variable already in the environment still
+  wins.
+
+### Changed
+
+- **A production server no longer starts without `DATABASE_URL`.** With it
+  unset, FlowCMS silently opened `data/app.db` — on most platforms a file in the
+  container's writable layer, deleted with every post, setting and account on
+  the next redeploy, while the site appeared to run normally. A production
+  server now refuses with a message naming the variable; migrations refuse
+  too. Development (`next dev`), tests and `next build` keep the SQLite
+  default. The Docker image is unaffected: it always sets
+  `DATABASE_URL=file:/data/app.db` on its volume.
+
+  If you deployed outside that image and relied on the old implicit default,
+  this does not orphan your database: set `DATABASE_URL=file:data/app.db` and
+  start the server from the same directory as before, and it reopens the same
+  file. (If that file lives in a container's writable layer, it is still lost
+  on the next redeploy regardless of this change — move it to persistent
+  storage.)
+
 ## [0.2.3] — 2026-09-08
 
 A one-page patch. The admin root — `/admin`, or whatever `FLOWCMS_ADMIN_PATH`

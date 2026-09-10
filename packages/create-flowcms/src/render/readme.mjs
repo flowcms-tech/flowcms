@@ -72,13 +72,13 @@ export function buildReadme(config) {
     lines.push("```bash")
     lines.push(`${install}`)
     lines.push(`${run("build:packages")}      # builds the local flowcms package`)
-    lines.push(`${run("db:migrate")}          # applies database migrations`)
     lines.push(`${run("build")}`)
-    lines.push(`${pm === "npm" ? "npm start" : run("start")}`)
+    lines.push(`${pm === "npm" ? "npm start" : run("start")}          # applies pending migrations, then serves`)
     lines.push("```")
     lines.push("")
     lines.push(
-      "For development, `" + run("dev") + "` instead of build and start.",
+      "For development, `" + run("dev") + "` instead of build and start — but run `" +
+        run("db:migrate") + "` first, because the dev server does not migrate.",
       "",
     )
 
@@ -153,10 +153,12 @@ export function buildReadme(config) {
   lines.push(`| \`${run("dev")}\` | Development server |`)
   lines.push(`| \`${run("build:packages")}\` | Build the local \`flowcms\` package |`)
   lines.push(`| \`${run("build")}\` | Production build |`)
-  lines.push(`| \`${pm === "npm" ? "npm start" : run("start")}\` | Serve the production build |`)
+  lines.push(
+    `| \`${pm === "npm" ? "npm start" : run("start")}\` | Apply pending migrations, then serve the production build |`,
+  )
   lines.push(`| \`${run("lint")}\` | ESLint |`)
   lines.push(`| \`${run("typecheck")}\` | \`tsc --noEmit\` — run it after a build |`)
-  lines.push(`| \`${run("db:migrate")}\` | Apply database migrations |`)
+  lines.push(`| \`${run("db:migrate")}\` | Apply database migrations (\`${pm === "npm" ? "npm start" : run("start")}\` runs this automatically) |`)
   lines.push(`| \`${run("db:bootstrap-owner")}\` | Create the first owner without the web form |`)
   lines.push("")
 

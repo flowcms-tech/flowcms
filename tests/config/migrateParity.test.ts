@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest"
-import { parseDatabaseConfig } from "@/Framework/Config/databaseConfig"
+import { databaseUrlFor, parseDatabaseConfig } from "@/Framework/Config/databaseConfig"
 // The migration runner is plain ESM so it can run under Node in the container,
 // where there is no TypeScript loader. That means it carries its own copy of
 // the dialect/URL rules.
-import { resolveConfig, redactDatabaseUrl as redactMjs } from "../../scripts/migrate.mjs"
+import {
+  assertProductionDatabaseUrl,
+  redactDatabaseUrl as redactMjs,
+  resolveConfig,
+} from "../../scripts/migrate.mjs"
 import { redactDatabaseUrl } from "@/Framework/Config/databaseConfig"
 
 /**
@@ -68,5 +72,48 @@ describe("migrate.mjs agrees with databaseConfig.ts", () => {
     ]) {
       expect(redactMjs(url), url).toBe(redactDatabaseUrl(url))
     }
+  })
+})
+
+/**
+ * `npm start` runs the migrator BEFORE `next start`, so on a bare production
+ * deployment the migrator's own refusal is the message an operator actually
+ * sees — never `databaseUrlFor`'s. `resolveConfig` keeps its existing generic
+ * message (pinned above with `toEqual`), so the identical, upgrade-path-aware
+ * text lives in a separate helper, `assertProductionDatabaseUrl`. This pins
+ * that helper's thrown message against `databaseUrlFor`'s, character for
+ * character.
+ */
+describe("assertProductionDatabaseUrl agrees with databaseUrlFor", () => {
+  it("throws the exact same message as databaseUrlFor when DATABASE_URL is missing in production", () => {
+    let expected = ""
+    try {
+      databaseUrlFor({ NODE_ENV: "production" })
+      throw new Error("expected databaseUrlFor to throw")
+    } catch (error) {
+      expected = (error as Error).message
+    }
+
+    let actual = ""
+    try {
+      assertProductionDatabaseUrl({ NODE_ENV: "production" })
+      throw new Error("expected assertProductionDatabaseUrl to throw")
+    } catch (error) {
+      actual = (error as Error).message
+    }
+
+    expect(actual).toBe(expected)
+  })
+
+  it("is a no-op once DATABASE_URL is set", () => {
+    expect(() =>
+      assertProductionDatabaseUrl({ NODE_ENV: "production", DATABASE_URL: "postgresql://u:p@h:5432/d" }),
+    ).not.toThrow()
+  })
+
+  it("is a no-op when NODE_ENV is not production", () => {
+    expect(() => assertProductionDatabaseUrl({})).not.toThrow()
+    expect(() => assertProductionDatabaseUrl({ NODE_ENV: "development" })).not.toThrow()
+    expect(() => assertProductionDatabaseUrl({ NODE_ENV: "test" })).not.toThrow()
   })
 })

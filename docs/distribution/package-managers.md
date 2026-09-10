@@ -72,29 +72,27 @@ and the three `<manager> create flowcms` spellings. Each resolves a name *from a
 registry*, and nothing is published yet, so a local tarball cannot stand in.
 They were not counted as passes and they are not a gap in manager support.
 
-### The image build's heap ceiling — addressed
+### The build's heap ceiling — addressed
 
-Next runs its TypeScript check in a **worker process**. A
-`node --max-old-space-size=4096` on the build command raises the heap for the
-parent only; the worker does not inherit it and falls back to V8's default,
-which is derived from the memory the container can see. On a builder with
-modest RAM that default is around 2 GB, and the check can exhaust it.
+Next runs its TypeScript check in a **child process**, which inherits the
+environment but not the parent's command-line flags. A
+`node --max-old-space-size=4096` on the build command therefore raised the
+ceiling for the parent only, and the type-check fell back to V8's default —
+about 2 GB inside a memory-limited container.
 
-The Dockerfile therefore sets the limit as an environment variable in the
-builder stage, so the workers inherit it:
+The `build` script is now `node scripts/build.mjs`, and the Dockerfile's
+builder stage runs the same command. The launcher sets the ceiling through
+`NODE_OPTIONS`, so it reaches the type-check on **every** build path: Docker,
+buildpacks, CI, and a plain `npm run build`. It keeps any `NODE_OPTIONS`
+already set, honours a `--max-old-space-size` already in it, and caps the
+4096 MB default at 75% of the container's memory limit. Override it with
+`FLOWCMS_BUILD_HEAP_MB` (for an image build, `--build-arg
+FLOWCMS_BUILD_HEAP_MB=6144`).
 
-```dockerfile
-ENV NODE_OPTIONS=--max-old-space-size=4096
-```
-
-**This is not bun-specific.** The same Dockerfile is generated for all four
-package managers and all four get the same setting.
-
-If your builder has very little memory available, raise that value rather than
-the build command's flag — the flag alone does not reach the workers.
-`tests/scaffolder/packageManagerPortability.test.ts` pins the Dockerfile's build
-command to the `build` script it stands in for, so keep the two in step if you
-change either.
+**This was never manager-specific.** The same launcher and Dockerfile are
+generated for all four package managers.
+`tests/scaffolder/packageManagerPortability.test.ts` pins the Dockerfile's
+build line to the `build` script.
 
 ### pnpm needs its build scripts approved
 
@@ -263,11 +261,11 @@ about PnP has been observed either way — it is outside the supported range
 rather than a known defect.
 
 - **Yarn Berry defaults to Plug'n'Play**, which means no `node_modules` at all.
-  The generated project's `build` script is
-  `node --max-old-space-size=4096 node_modules/next/dist/bin/next build` — a
-  literal path into a directory PnP does not create — and the Dockerfile's build
-  step is the same command. A Berry project would need `nodeLinker: node-modules`
-  in a `.yarnrc.yml` that the template does not ship.
+  The generated project's build launcher, `scripts/build.mjs`, runs Next from
+  `node_modules/next/dist/bin/next` — a literal path into a directory PnP does
+  not create — and the Dockerfile's build step is the same command. A Berry
+  project would need `nodeLinker: node-modules` in a `.yarnrc.yml` that the
+  template does not ship.
 - **Yarn 1 copies a `file:` dependency into `node_modules` at install time.**
   The generated project depends on its own `flowcms` copy as
   `file:packages/flowcms`, and the supported order is install → `build:packages`

@@ -66,39 +66,27 @@ RUN node scripts/build-package.mjs
 RUN node scripts/build-example-theme.mjs
 # flowcms:template-strip:end
 
-# THE FLAG ON THE `RUN` LINE BELOW DOES NOT REACH THE TYPESCRIPT WORKER.
+# The production build: the same `node scripts/build.mjs` the `build` script
+# runs, invoked through node rather than through a package manager. This stage
+# has node_modules but not necessarily the manager that created them: a
+# generated project may have been installed with pnpm or yarn, whose shims exist
+# only after `corepack enable` in the deps stage, or with bun, which is not in
+# this image at all outside it. The two are pinned to each other by
+# tests/scaffolder/packageManagerPortability.test.ts.
 #
-# `node --max-old-space-size=4096` raises the heap for the process it starts,
-# and that process is not the one that runs out of memory. Next forks a separate
-# worker for the type-check phase, and a forked worker inherits ENVIRONMENT, not
-# the parent's command-line flags — so it fell back to V8's default heap, which
-# is derived from container memory and was ~2 GB here. The build then died with
-# a JS heap OOM inside TypeScript while the parent still had 4 GB it never used.
+# THE LAUNCHER SETS THE HEAP CEILING; THIS FILE DELIBERATELY DOES NOT. Next
+# type-checks in a child process that inherits the environment but not the
+# parent's command-line flags, so the ceiling has to travel in NODE_OPTIONS.
+# This stage used to set it with ENV, which fixed image builds and nothing
+# else — buildpacks never read a Dockerfile. scripts/build.mjs now sets it for
+# every build path, capped below the container's memory limit. Raise it for an
+# image build with `--build-arg FLOWCMS_BUILD_HEAP_MB=6144`.
 #
-# Setting it as an environment variable is what makes it inheritable. Both are
-# kept: the RUN flag because the parent genuinely needs the headroom too, and
-# because `tests/scaffolder/packageManagerPortability.test.ts` pins that line to
-# the `build` script character for character.
-#
-# Builder stage ONLY. The runner must not carry it: the production server has no
-# type-check phase, and a 4 GB ceiling on the long-lived process is a footgun on
-# a small VPS — it lets a leak grow to 4 GB before Node does anything about it,
-# rather than failing early and visibly.
-#
-# Found by Phase 8.7's bun image build, which is the first one that got far
-# enough to reach the type-check phase — the earlier `@types/minimatch` failure
-# had been masking it. The Dockerfile is identical for all four package
-# managers, so this was never bun-specific.
-ENV NODE_OPTIONS=--max-old-space-size=4096
-
-# The production build, invoked through node rather than through a package
-# manager. This stage has node_modules but not necessarily the manager that
-# created them: a generated project may have been installed with pnpm or yarn,
-# whose shims exist only after `corepack enable` in the deps stage, or with bun,
-# which is not in this image at all outside it. Node is always here, and the
-# line below is exactly what the `build` script runs — the two are pinned to
-# each other by tests/scaffolder/packageManagerPortability.test.ts.
-RUN node --max-old-space-size=4096 node_modules/next/dist/bin/next build
+# The runner stage must not set it either: the production server has no
+# type-check phase, and a 4 GB ceiling on a long-lived process lets a leak grow
+# to 4 GB before Node reacts, instead of failing early and visibly.
+ARG FLOWCMS_BUILD_HEAP_MB
+RUN node scripts/build.mjs
 
 # Stage the database drivers for the runtime image. Next's tracer cannot see
 # them: createDatabase.ts require()s them inside a dialect switch, and

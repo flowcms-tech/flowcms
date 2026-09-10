@@ -1,6 +1,7 @@
 import "server-only"
 
-import { google } from "googleapis"
+// The Indexing entry point, not the 328-API `googleapis` barrel — see GoogleSearchConsole.ts.
+import { indexing as indexingApi } from "googleapis/build/src/apis/indexing"
 import { getGscConfig, getGscRedirectUri, getSettingsRow } from "@/Framework/Settings/SettingsService"
 import { buildOAuthClient } from "./GoogleSearchConsole"
 
@@ -73,7 +74,7 @@ export async function submitToGoogleIndexing(
     })
     client.setCredentials({ refresh_token: gsc.refreshToken })
 
-    const indexing = google.indexing({ version: "v3", auth: client })
+    const indexing = indexingApi({ version: "v3", auth: client })
 
     // Sequential, not Promise.all: the API is quota-limited per project and a
     // burst of parallel calls is the fastest way to spend a day's quota on
