@@ -43,6 +43,16 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   trouble. The migrator now loads `.env` files with Next's own loader: the same
   files, the same precedence, and a variable already in the environment still
   wins.
+- **Two storage migrations can no longer be opened at once on PostgreSQL.**
+  Opening one checked that none was open and then inserted, and that
+  check-then-insert raced: two replicas, or two near-simultaneous admin
+  requests, could both pass the check and both insert, which is the one
+  condition the migration engine documents as unsafe. The database now
+  enforces one open migration itself, with a unique slot that every open
+  migration holds and every finished one gives back; the loser of a race is
+  told a migration is already in progress. The schema migration that adds the
+  slot backfills only the newest open job, so an installation that already
+  holds two still upgrades. Pinned by `tests/db/storageMigrationEngines.test.ts`.
 
 ### Changed
 

@@ -64,6 +64,13 @@
       "when": 1788200000000,
       "tag": "0008_inventory_generation",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1788300000000,
+      "tag": "0009_active_migration_slot",
+      "breakpoints": true
     }
   ]
 }

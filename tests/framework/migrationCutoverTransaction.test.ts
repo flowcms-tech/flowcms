@@ -7,6 +7,11 @@ import { parseDatabaseConfig } from "@/Framework/Config/databaseConfig"
 import { createDatabase, type DatabaseHandle } from "@/db/createDatabase"
 import { SETTINGS_SINGLETON_ID } from "@/db/schema/settings"
 import { storageLocationId, type ResolvedStorageConfig } from "@/Framework/Storage/storageConfig"
+import { commitCutover } from "@/Framework/Storage/Migration/cutover"
+import {
+  createMigrationRepository,
+  type MigrationRow,
+} from "@/Framework/Storage/Migration/migrationRepository"
 
 /**
  * THE AUTHORITATIVE TRANSACTION, against a real database.
@@ -116,10 +121,15 @@ async function readSettings() {
   return rows[0]
 }
 
-async function seedJob(destination: ResolvedStorageConfig, id = "job-1") {
+async function seedJob(
+  destination: ResolvedStorageConfig,
+  id = "job-1",
+  extra: Record<string, unknown> = {},
+) {
   const t = handle.schema
   const now = new Date()
   await handle.db.insert(t.storageMigrations).values({
+    ...extra,
     id,
     status: "cutting_over",
     mode: "copy",
@@ -328,5 +338,48 @@ describe("duplicate cutover", () => {
 
     const afterSecond = await readSettings()
     expect(afterSecond.activeStorageLocationId).toBe(afterFirst.activeStorageLocationId)
+  })
+})
+
+describe("the real commitCutover", () => {
+  it("gives the open-migration slot back in the same write that completes the job", async () => {
+    // An ordinary cutover completes the job HERE, not through `transition()`,
+    // so this write must release the slot itself. If it did not, the completed
+    // job would hold the unique slot forever, and the installation could never
+    // start another migration.
+    const t = handle.schema
+    const id = await seedJob(DESTINATION_LOCAL, "job-1", { activeSlot: 1 })
+    const [job] = await handle.db
+      .select()
+      .from(t.storageMigrations)
+      .where(eq(t.storageMigrations.id, id))
+    expect(job.activeSlot).toBe(1)
+
+    await commitCutover(job as MigrationRow, DESTINATION_LOCAL, {
+      db: handle.db as never,
+      settings: t.settings as never,
+      migrations: t.storageMigrations as never,
+      invalidate: async () => {},
+    })
+
+    const [after] = await handle.db
+      .select()
+      .from(t.storageMigrations)
+      .where(eq(t.storageMigrations.id, id))
+    expect(after.status).toBe("completed")
+    expect(after.activeSlot).toBeNull()
+
+    // The slot is really free: the next migration opens.
+    const repository = createMigrationRepository({
+      db: handle.db,
+      migrations: t.storageMigrations,
+      entries: t.storageMigrationEntries,
+    })
+    const next = await repository.create({
+      mode: "copy",
+      source: { driver: "local", locationId: storageLocationId(DESTINATION_LOCAL), root: "/data/uploads" },
+      destination: { driver: "s3", locationId: storageLocationId(SOURCE), bucket: "old-bucket" },
+    })
+    expect(next.activeSlot).toBe(1)
   })
 })

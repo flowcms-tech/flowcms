@@ -16,7 +16,8 @@ import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqli
  * that nothing points at, and the job knows exactly which objects it created.
  */
 
-/** One relocation attempt. At most one may be open at a time. */
+/** One relocation attempt. At most one may be open at a time; `activeSlot` is
+ *  what makes that true. */
 export const storageMigrations = sqliteTable("storage_migration", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
 
@@ -189,7 +190,30 @@ export const storageMigrations = sqliteTable("storage_migration", {
   updatedAt: integer("updatedAt", { mode: "timestamp_ms" })
     .notNull()
     .$defaultFn(() => new Date()),
-})
+
+  /**
+   * THE ONE OPEN MIGRATION, ENFORCED BY THE DATABASE.
+   *
+   * `1` while the job is open, NULL once it reaches a terminal status. A unique
+   * index admits any number of NULLs on every supported engine (SQLite,
+   * PostgreSQL, MySQL and MariaDB) and only one `1`, so the database itself
+   * permits at most one open migration.
+   *
+   * THIS, NOT THE PRE-CHECK, IS THE GUARANTEE. `create()` still checks for an
+   * open job first, because that is the cheap, friendly path. But a check
+   * followed by an insert is a race, and under PostgreSQL's READ COMMITTED two
+   * replicas both saw nothing open and both inserted. With the slot, the second
+   * insert is refused, and reported as "already in progress".
+   *
+   * Never `0` for a released slot: the index would admit only one `0` as well.
+   * Migration `0009` slotted only the newest job that was open when it ran, so
+   * an installation this race had already left with two open jobs still
+   * upgraded. The older one keeps NULL, and the pre-check still sees it.
+   */
+  activeSlot: integer("activeSlot"),
+}, (table) => [
+  uniqueIndex("storage_migration_active_slot_idx").on(table.activeSlot),
+])
 
 /**
  * One source entry, and what happened to it.

@@ -167,6 +167,10 @@ export async function commitCutover(
       .update(storageMigrations)
       .set({
         status: "completed",
+        // Completing the job gives back the one open-migration slot, in the
+        // same write. `transition()` does this for every other terminal move;
+        // this is the one path that completes a job without going through it.
+        activeSlot: null,
         version: job.version + 1,
         cutoverAt: now,
         updatedAt: now,

@@ -176,6 +176,7 @@ describe("a pre-refactor installation upgrading to this branch", () => {
       "cutoverStartedAt", // 0006
       "extrasAcknowledgedCount", // 0007
       "inventoryGeneration", // 0008
+      "activeSlot", // 0009
     ]) {
       expect(jobColumns, `storage_migration.${column}`).toContain(column)
     }
@@ -202,6 +203,12 @@ describe("a pre-refactor installation upgrading to this branch", () => {
       (r) => r.name === "storage_migration_entry_job_key_idx",
     )
     expect(Number(unique?.unique)).toBe(1)
+
+    // 0009: the slot that lets the database refuse a second open migration.
+    const slotIndex = (await db.execute("pragma index_list(storage_migration)")).rows.find(
+      (r) => r.name === "storage_migration_active_slot_idx",
+    )
+    expect(Number(slotIndex?.unique)).toBe(1)
 
     db.close()
   }, 60_000)
@@ -309,6 +316,64 @@ describe("what an upgraded installation resolves at runtime", () => {
     expect(String(pinned.rows[0].activeStorageLocationId)).toContain("existing-media")
 
     await handle.close()
+    db.close()
+  }, 60_000)
+})
+
+/** Every migration before `0009` introduced the active slot. */
+const PRE_SLOT_ERA = [
+  ...MAIN_ERA,
+  "0005_storage_topology",
+  "0006_cutover_window",
+  "0007_migration_orchestration",
+  "0008_inventory_generation",
+]
+
+describe("an installation the creation race already left with two open migrations", () => {
+  it("still upgrades, and 0009 gives the slot to the newest open job only", async () => {
+    // WHY ONLY ONE. The race that 0009 closes may already have happened: two
+    // replicas, or two near-simultaneous requests, each opened a job. Slotting
+    // both would make the unique index fail to build, and the deploy with it.
+    // The older open job keeps NULL, and the pre-check in `create()` still
+    // sees it, so no new job can open until the operator resolves both.
+    const url = `file:${join(workspace, "two-open.db")}`
+    await migrateWith(url, migrationsFolderFor(PRE_SLOT_ERA, "pre-slot"))
+
+    const db = await client(url)
+    const t0 = Date.now() - 86_400_000
+    const job = (id: string, status: string, createdAt: number) =>
+      db.execute({
+        sql: `insert into storage_migration
+                (id, status, mode, sourceDriver, sourceLocationId,
+                 destinationDriver, destinationLocationId, createdAt, updatedAt)
+              values (?, ?, 'copy', 'local', 'local:/source', 'local', 'local:/destination', ?, ?)`,
+        args: [id, status, createdAt, createdAt],
+      })
+
+    await job("older-open", "copying", t0)
+    // Two open jobs created in the same millisecond: the id breaks the tie.
+    await job("newest-open-a", "draft", t0 + 1_000)
+    await job("newest-open-b", "inventorying", t0 + 1_000)
+    // Terminal jobs are newer still, and must never take the slot.
+    await job("completed-later", "completed", t0 + 2_000)
+    await job("cancelled-later", "cancelled", t0 + 3_000)
+    await job("failed-later", "failed", t0 + 4_000)
+
+    await migrateWith(url, "src/db/migrations/sqlite")
+
+    const slotted = await db.execute("select id from storage_migration where activeSlot = 1")
+    expect(slotted.rows.map((row) => row.id)).toEqual(["newest-open-b"])
+    const unslotted = await db.execute(
+      "select count(*) as n from storage_migration where activeSlot is null",
+    )
+    expect(Number(unslotted.rows[0].n)).toBe(5)
+
+    // And the index that makes the slot mean something was built.
+    const index = (await db.execute("pragma index_list(storage_migration)")).rows.find(
+      (row) => row.name === "storage_migration_active_slot_idx",
+    )
+    expect(Number(index?.unique)).toBe(1)
+
     db.close()
   }, 60_000)
 })
