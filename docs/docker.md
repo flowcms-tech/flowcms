@@ -70,18 +70,19 @@ before `next build`. A theme resolves `flowcms/theme` to
 a missing module several minutes into the Next build rather than at the step
 that caused it. See [`docs/distribution/packages.md`](./distribution/packages.md).
 
-The builder stage sets `ENV NODE_OPTIONS=--max-old-space-size=4096` as well as
-passing the same flag on the build command. That is not belt-and-braces: Next
-forks a separate worker for the type-check phase, and a fork inherits the
-environment rather than the parent's command-line flags, so the worker otherwise
-falls back to V8's container-derived default (~2 GB) and the build dies of a JS
-heap OOM inside TypeScript while the parent still has headroom it never used.
+The builder stage runs `node scripts/build.mjs`, the same launcher as
+`npm run build`, and the launcher sets the V8 heap ceiling through
+`NODE_OPTIONS`. It has to be an environment variable: Next runs its TypeScript
+check in a child process that inherits the environment but not the parent's
+command-line flags, so a `--max-old-space-size` flag on the build command never
+reaches the process that needs it. The ceiling defaults to 4096 MB, lowered to
+75% of the container's memory limit when that is smaller. Raise it with
+`--build-arg FLOWCMS_BUILD_HEAP_MB=6144`.
 
-**The runtime stage deliberately does not set it.** The production server has no
-type-check phase, and a 4 GB ceiling on a long-lived process is a poor trade on
-a small VPS — it lets a leak grow to 4 GB before Node reacts instead of failing
-early. If you are building on a machine with little memory, raise the value in
-the builder stage only.
+**The runtime stage deliberately sets no ceiling.** The production server has
+no type-check phase, and a 4 GB ceiling on a long-lived process is a poor trade
+on a small VPS — it lets a leak grow to 4 GB before Node reacts instead of
+failing early.
 
 Migrations run **at container start**, before the server binds — not at build
 time (a build has no volume) and not lazily on first request (that hides

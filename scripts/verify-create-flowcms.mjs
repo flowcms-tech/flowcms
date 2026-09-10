@@ -99,11 +99,11 @@ const npmRun = (args, cwd, options = {}) =>
  * The heap ceiling for the generated project's build and typecheck, as an
  * ENVIRONMENT variable rather than a command-line flag.
  *
- * The same reason the Dockerfile sets `ENV NODE_OPTIONS` (Phase 8.8): Next forks
- * a separate worker for the type-check phase, and a fork inherits the
- * environment, not the parent's argv. `--max-old-space-size` on the `build`
- * script therefore never reaches the process that needs it, and `tsc --noEmit`
- * gets no ceiling at all.
+ * Next type-checks in a child process that inherits the environment, not the
+ * parent's argv. The `build` script is now `scripts/build.mjs`, which exports
+ * the ceiling itself and keeps one already present in NODE_OPTIONS — so this
+ * value reaches the build either way. `typecheck` is plain `tsc --noEmit` with
+ * no launcher, and still needs it from here.
  *
  * That is what killed this proof on macos-14, where V8's default heap is
  * smaller than on the Linux and Windows runners: both commands died in

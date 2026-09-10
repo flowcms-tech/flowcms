@@ -119,26 +119,25 @@ describe("the Dockerfile outside the rendered region", () => {
   })
 
   /**
-   * THE FLAG ON THE `RUN` LINE DOES NOT REACH THE TYPE-CHECK WORKER.
+   * THE HEAP CEILING HAS ONE DEFINITION, AND IT IS NOT IN THIS FILE.
    *
-   * `node --max-old-space-size=4096` raises the heap of the process it starts.
-   * Next forks a separate worker for the type-check phase, and a fork inherits
-   * ENVIRONMENT rather than the parent's argv — so the worker took V8's default
-   * heap (derived from container memory, ~2 GB) and died of a JS heap OOM while
-   * the parent still had headroom it never touched. Only `ENV` is inheritable.
-   *
-   * Both belong in the file, so both are asserted: dropping the `ENV` brings the
-   * OOM back, and dropping the flag unpins the RUN line from the `build` script
-   * above.
-   *
-   * Phase 8.7 found this on the bun image build — the first one to survive far
-   * enough to type-check, the earlier `@types/minimatch` failure having masked
-   * it. The Dockerfile is identical for all four managers; it was never
-   * bun-specific.
+   * Next type-checks in a child process that inherits ENVIRONMENT, not argv, so
+   * `--max-old-space-size` on the build command never reached it. The fix used
+   * to be `ENV NODE_OPTIONS` in this stage — which only image builds read, so
+   * every buildpack build kept the flag that does not work. `scripts/build.mjs`
+   * now exports the ceiling for every build path; a second definition here could
+   * only drift from it.
    */
-  it("exports the heap limit to the build stage, so forked workers inherit it", () => {
-    const dockerfile = repoFile("Dockerfile")
-    expect(dockerfile).toContain("ENV NODE_OPTIONS=--max-old-space-size=4096")
+  it("leaves the heap ceiling to the build launcher", () => {
+    const manifest = JSON.parse(repoFile("package.json")) as { scripts: Record<string, string> }
+    const instructions = repoFile("Dockerfile")
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n")
+
+    expect(manifest.scripts.build).toBe("node scripts/build.mjs")
+    expect(instructions).not.toMatch(/^\s*ENV\s+NODE_OPTIONS/m)
+    expect(instructions).not.toContain("--max-old-space-size")
   })
 
   /**

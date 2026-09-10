@@ -17,6 +17,18 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   container. Each integration now imports only its own API.
   Pinned by `tests/architecture/googleapisEntryPoints.test.ts`.
 
+- **`npm run build` no longer runs out of memory on buildpack platforms.** The
+  build script passed `--max-old-space-size=4096` on the command line, which
+  Next's TypeScript check never sees: it runs in a child process that inherits
+  the environment, not the parent's flags. The Dockerfile had compensated with
+  `ENV NODE_OPTIONS`, so image builds worked while Railpack, Nixpacks and every
+  buildpack died of a JavaScript heap out-of-memory error at about 2 GB. The
+  build now runs through `scripts/build.mjs`, which sets the ceiling in
+  `NODE_OPTIONS` for every build path, keeps existing `NODE_OPTIONS` entries,
+  caps the default below the container's memory limit, and accepts
+  `FLOWCMS_BUILD_HEAP_MB` as an override. The Dockerfile uses the same
+  launcher, so the ceiling is defined once.
+
 ## [0.2.3] — 2026-09-08
 
 A one-page patch. The admin root — `/admin`, or whatever `FLOWCMS_ADMIN_PATH`

@@ -30,6 +30,11 @@ services:
     command: ["node", "scripts/dev-container-start.mjs"]
     environment:
       NODE_ENV: development
+      # The heap ceiling this container used to inherit from the Dockerfile's
+      # builder stage. The image build now sets its own (scripts/build.mjs), and
+      # this stage also runs `next dev` — so its ceiling is stated here, where it
+      # applies, instead of arriving by accident.
+      NODE_OPTIONS: --max-old-space-size=4096
       # HOT RELOAD ACROSS THE BIND MOUNT.
       #
       # The mount propagates CONTENT correctly and does NOT propagate filesystem
