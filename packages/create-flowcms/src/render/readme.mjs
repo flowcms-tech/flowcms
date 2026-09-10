@@ -153,7 +153,9 @@ export function buildReadme(config) {
   lines.push(`| \`${run("dev")}\` | Development server |`)
   lines.push(`| \`${run("build:packages")}\` | Build the local \`flowcms\` package |`)
   lines.push(`| \`${run("build")}\` | Production build |`)
-  lines.push(`| \`${pm === "npm" ? "npm start" : run("start")}\` | Serve the production build |`)
+  lines.push(
+    `| \`${pm === "npm" ? "npm start" : run("start")}\` | Apply pending migrations, then serve the production build |`,
+  )
   lines.push(`| \`${run("lint")}\` | ESLint |`)
   lines.push(`| \`${run("typecheck")}\` | \`tsc --noEmit\` — run it after a build |`)
   lines.push(`| \`${run("db:migrate")}\` | Apply database migrations |`)

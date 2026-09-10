@@ -22,7 +22,7 @@
     "dev:docker:build": "node scripts/dev/up.mjs --build",
     "dev:reset": "node scripts/dev/reset.mjs",
     "build": "node scripts/build.mjs",
-    "start": "next start",
+    "start": "node scripts/start.mjs",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/build-package.mjs && node scripts/build-example-theme.mjs && node scripts/build-create-flowcms.mjs && vitest run",

@@ -29,6 +29,19 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `FLOWCMS_BUILD_HEAP_MB` as an override. The Dockerfile uses the same
   launcher, so the ceiling is defined once.
 
+- **`npm run start` applies migrations before it serves.** Migrations ran only
+  in the Docker image's entrypoint, so a deployment built by a buildpack — which
+  runs the `start` script instead — never created its schema and reported
+  `migrations_pending` indefinitely. `start` now runs the migrator first and
+  does not start the server if it fails, exactly as the image does.
+- **`npm run db:migrate` reads the project's `.env` files.** It read only the
+  shell environment, and npm loads no `.env` for a script, so the migration
+  step create-flowcms prints for a local deployment failed with
+  "DATABASE_URL is required" while the server read the same file without
+  trouble. The migrator now loads `.env` files with Next's own loader: the same
+  files, the same precedence, and a variable already in the environment still
+  wins.
+
 ### Changed
 
 - **A production server no longer starts without `DATABASE_URL`.** With it

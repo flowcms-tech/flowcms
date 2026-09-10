@@ -95,7 +95,9 @@ docker compose -f compose.yml -f compose.mariadb.yml up -d
 
 Redis is opt-in (`--profile redis`), and an external S3 provider can replace
 Garage entirely (`-f compose.external-s3.yml`) — storage and cache are
-independent of the database. Migrations run automatically at container start.
+independent of the database. Migrations run automatically before the server
+starts — at container start under Docker, and in `npm run start` everywhere
+else.
 
 See **[docs/docker.md](docs/docker.md)** for every database mode, persistence,
 backups, health and readiness semantics, and the full environment reference.
@@ -152,7 +154,7 @@ the default theme.
 | --- | --- |
 | `npm run dev` | Development server, bound to `0.0.0.0` |
 | `npm run build` | Production build |
-| `npm run start` | Serve the production build |
+| `npm run start` | Apply pending migrations, then serve the production build |
 | `npm run lint` | ESLint (flat config; `next lint` is removed in Next 16) |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run test` | Vitest, once |

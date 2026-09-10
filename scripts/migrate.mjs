@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs"
+import { createRequire } from "node:module"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -120,7 +121,52 @@ async function withRetry(label, attempts, fn) {
   throw lastError
 }
 
+/**
+ * Load the project's `.env` files the way Next does, before reading
+ * DATABASE_URL.
+ *
+ * `next dev` and `next start` read `.env`, `.env.local` and their per-mode
+ * variants. A plain `node scripts/migrate.mjs` reads nothing, and npm, pnpm and
+ * yarn load no `.env` for a script (bun does). So `npm run db:migrate` in a
+ * project configured through `.env` — exactly what create-flowcms writes for a
+ * local deployment — failed with "DATABASE_URL is required" while the server it
+ * was preparing read the same file without trouble.
+ *
+ * @next/env IS Next's loader, so the migrator and the server cannot disagree
+ * about which database they mean: same files, same precedence, same `$VAR`
+ * expansion — and a variable already in the environment always wins, which keeps
+ * a container's or a platform's configuration authoritative.
+ *
+ * Resolved THROUGH `next`: under pnpm, @next/env is next's own dependency and is
+ * not hoisted to the project's node_modules. Absent altogether, there is nothing
+ * to load and the environment stays the only source — as it always was in the
+ * image, whose context excludes every .env file.
+ *
+ * Called from `main()` only. `bootstrap-owner.mjs` imports this module, and
+ * importing must not start work. Values are never printed; only file names.
+ */
+export function loadProjectEnv(dir = process.cwd()) {
+  let nextEnv
+  try {
+    const nextManifest = createRequire(import.meta.url).resolve("next/package.json")
+    nextEnv = createRequire(nextManifest)("@next/env")
+  } catch (error) {
+    if (error && error.code === "MODULE_NOT_FOUND") return []
+    throw error
+  }
+
+  const dev = process.env.NODE_ENV !== "production"
+  const { loadedEnvFiles } = nextEnv.loadEnvConfig(dir, dev, {
+    info: () => {},
+    error: (...args) => console.error(...args),
+  })
+  const files = loadedEnvFiles.map((file) => file.path)
+  if (files.length > 0) console.log(`FlowCMS: read ${files.join(", ")}`)
+  return files
+}
+
 async function main() {
+  loadProjectEnv()
   const config = resolveConfig(process.env)
   const folder = resolve(
     import.meta.dirname,
@@ -185,8 +231,9 @@ async function main() {
  * `settings` as well as `user`.
  *
  * Importing a module must not start work. Every caller that wants migrations
- * runs this file directly — `docker/entrypoint.sh`, `bun run db:migrate` — so
- * nothing depended on the side effect except by accident.
+ * runs this file directly — `docker/entrypoint.sh`, `scripts/start.mjs`,
+ * `scripts/dev-container-start.mjs`, `db:migrate` — so nothing depended on the
+ * side effect except by accident.
  */
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
