@@ -1,4 +1,4 @@
-import { parseDatabaseConfig } from "@/Framework/Config/databaseConfig"
+import { databaseUrlFor, parseDatabaseConfig } from "@/Framework/Config/databaseConfig"
 import { createDatabase, type DatabaseHandle } from "./createDatabase"
 
 /**
@@ -22,10 +22,17 @@ import { createDatabase, type DatabaseHandle } from "./createDatabase"
  * runner's job (`waitForDatabase`), not this module's.
  *
  * DATABASE_PATH is gone. `DATABASE_URL=file:./data/app.db` is the SQLite form.
+ *
+ * NO SILENT DEFAULT IN PRODUCTION. With DATABASE_URL unset this used to open
+ * `file:data/app.db` everywhere — in a production container, a file in the
+ * writable layer that disappears with the site's content on the next redeploy.
+ * `databaseUrlFor` keeps that default for development and for `next build`, and
+ * refuses it while serving. `process.env` is passed whole, not read property by
+ * property, so the bundler cannot inline NODE_ENV at build time.
  */
 const config = parseDatabaseConfig({
   DATABASE_DIALECT: process.env.DATABASE_DIALECT,
-  DATABASE_URL: process.env.DATABASE_URL ?? "file:data/app.db",
+  DATABASE_URL: databaseUrlFor(process.env),
 })
 
 export const handle: DatabaseHandle = createDatabase(config)

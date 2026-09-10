@@ -29,6 +29,17 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `FLOWCMS_BUILD_HEAP_MB` as an override. The Dockerfile uses the same
   launcher, so the ceiling is defined once.
 
+### Changed
+
+- **A production server no longer starts without `DATABASE_URL`.** With it
+  unset, FlowCMS silently opened `data/app.db` — on most platforms a file in the
+  container's writable layer, deleted with every post, setting and account on
+  the next redeploy, while the site appeared to run normally. A production
+  server now refuses with a message naming the variable; migrations refuse
+  too. Development (`next dev`), tests and `next build` keep the SQLite
+  default. The Docker image is unaffected: it always sets
+  `DATABASE_URL=file:/data/app.db` on its volume.
+
 ## [0.2.3] — 2026-09-08
 
 A one-page patch. The admin root — `/admin`, or whatever `FLOWCMS_ADMIN_PATH`
