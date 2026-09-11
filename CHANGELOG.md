@@ -7,6 +7,19 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The development server no longer leaks a database pool on every reload.**
+  `next dev` re-evaluates `src/db/client.ts` after a save without restarting
+  Node, and each re-evaluation opened a new MySQL or PostgreSQL pool while the
+  previous one stayed open with nothing left to close it. A long editing session
+  ended in `ER_CON_COUNT_ERROR: Too many connections`. The handle is now kept
+  for the life of the process and reused across reloads; changing
+  `DATABASE_URL` or `DATABASE_DIALECT` builds a new one and closes the old.
+  Production, which evaluates the module once, behaves as before. Reported in
+  [#18](https://github.com/flowcms-tech/flowcms/issues/18); pinned by
+  `tests/db/clientHandleReuse.test.ts`.
+
 ## [0.2.4] — 2026-09-11
 
 A deployment patch. A production site built with `create-flowcms` and deployed
