@@ -19,6 +19,12 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Production, which evaluates the module once, behaves as before. Reported in
   [#18](https://github.com/flowcms-tech/flowcms/issues/18); pinned by
   `tests/db/clientHandleReuse.test.ts`.
+- **The same reload leak is gone from the Redis client.** The cache layer kept
+  its connection in a module-scope variable that every reload reset, so each
+  save could open another Redis connection while the previous one stayed open.
+  It is now kept for the life of the process and reused while `REDIS_URL` is
+  unchanged; changing or removing `REDIS_URL` disconnects the old client.
+  Pinned by `tests/framework/redisClientReuse.test.ts`.
 
 ## [0.2.4] — 2026-09-11
 
