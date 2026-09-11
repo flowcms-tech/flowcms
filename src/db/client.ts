@@ -1,4 +1,8 @@
-import { databaseUrlFor, parseDatabaseConfig } from "@/Framework/Config/databaseConfig"
+import {
+  databaseUrlFor,
+  parseDatabaseConfig,
+  type DatabaseConfig,
+} from "@/Framework/Config/databaseConfig"
 import { createDatabase, type DatabaseHandle } from "./createDatabase"
 
 /**
@@ -29,13 +33,47 @@ import { createDatabase, type DatabaseHandle } from "./createDatabase"
  * `databaseUrlFor` keeps that default for development and for `next build`, and
  * refuses it while serving. `process.env` is passed whole, not read property by
  * property, so the bundler cannot inline NODE_ENV at build time.
+ *
+ * ONE HANDLE PER PROCESS, NOT ONE PER EVALUATION. `next dev` re-evaluates this
+ * module after a save without restarting Node. As a plain module-scope
+ * constant, every re-evaluation opened a new pool and orphaned the previous one
+ * — up to DATABASE_POOL_MAX connections each, with nothing left that could
+ * close them — until MySQL answered `ER_CON_COUNT_ERROR` (issue #18). The
+ * handle now lives on `globalThis`, which survives re-evaluation, and is reused
+ * while the dialect and URL it was built from are unchanged. A change (Next
+ * reloads `.env` in place) builds a new handle and closes the old one, rather
+ * than quietly keeping the previous database. The key carries the dialect
+ * because MySQL and MariaDB share the `mysql:` scheme.
+ *
+ * Not restricted to development: a production process evaluates this module
+ * once, so the cache is simply never consulted twice there.
  */
 const config = parseDatabaseConfig({
   DATABASE_DIALECT: process.env.DATABASE_DIALECT,
   DATABASE_URL: databaseUrlFor(process.env),
 })
 
-export const handle: DatabaseHandle = createDatabase(config)
+const SHARED_HANDLE = Symbol.for("flowcms.db.handle")
+
+type SharedHandle = { key: string; handle: DatabaseHandle }
+
+function processWideHandle(config: DatabaseConfig): DatabaseHandle {
+  const shared = globalThis as typeof globalThis & { [SHARED_HANDLE]?: SharedHandle }
+  const key = `${config.dialect} ${config.url}`
+
+  const existing = shared[SHARED_HANDLE]
+  if (existing?.key === key) return existing.handle
+
+  // Nothing else holds the replaced handle's pool any more. The catch only
+  // prevents an unhandled rejection from a pool that is already gone.
+  if (existing) void existing.handle.close().catch(() => {})
+
+  const handle = createDatabase(config)
+  shared[SHARED_HANDLE] = { key, handle }
+  return handle
+}
+
+export const handle: DatabaseHandle = processWideHandle(config)
 
 export const db = handle.db
 export const databaseDialect = handle.dialect
