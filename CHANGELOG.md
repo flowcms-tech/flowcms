@@ -7,6 +7,21 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-09-11
+
+A deployment patch. A production site built with `create-flowcms` and deployed
+with a buildpack reported four defects, and all four are fixed here:
+- builds no longer run out of memory outside Docker;
+- `npm start` applies migrations before it serves;
+- `npm run db:migrate` reads the project's `.env`;
+- a production server refuses to start without `DATABASE_URL` instead of silently using a throwaway SQLite file.
+
+The release also closes a race that could open two storage migrations at once on PostgreSQL.
+
+**Upgrading.** There is one behaviour change and one schema migration:
+- **`DATABASE_URL` is now required in production outside the official Docker image.** If your deployment relied on the old implicit default, set `DATABASE_URL=file:data/app.db` to keep the same database (see *Changed* below). Docker users are unaffected.
+- **Migration `0009` adds a column and a unique index to `storage_migration`.** It applies automatically: at container start under Docker, and in `npm run start` everywhere else.
+
 ### Fixed
 
 - **Type-checking a FlowCMS project needs about half the memory it did.** The
@@ -518,7 +533,8 @@ API, database and object storage, and no external backend.
   [`docs/distribution/create-flowcms.md`](docs/distribution/create-flowcms.md).
 - No release automation is wired up yet; see `docs/ci.md` when it lands.
 
-[Unreleased]: https://github.com/flowcms-tech/flowcms/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/flowcms-tech/flowcms/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/flowcms-tech/flowcms/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/flowcms-tech/flowcms/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/flowcms-tech/flowcms/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/flowcms-tech/flowcms/compare/v0.2.0...v0.2.1
