@@ -3,17 +3,22 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { eq } from "drizzle-orm"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { parseDatabaseConfig, type DatabaseDialect } from "@/Framework/Config/databaseConfig"
 import { createDatabase, type DatabaseHandle } from "@/db/createDatabase"
 import { SETTINGS_SINGLETON_ID } from "@/db/schema/settings"
+import { isUniqueViolation } from "@/db/writes"
 import {
   clearMigrationCredentials,
   commitCutover,
   type CutoverStore,
 } from "@/Framework/Storage/Migration/cutover"
 import { probeDestinationCaseSensitivity } from "@/Framework/Storage/Migration/compatibility"
-import { createMigrationRepository } from "@/Framework/Storage/Migration/migrationRepository"
+import {
+  MigrationAlreadyActiveError,
+  createMigrationRepository,
+  type MigrationRow,
+} from "@/Framework/Storage/Migration/migrationRepository"
 import { createMigrationService } from "@/Framework/Storage/Migration/migrationService"
 import { acquireCutoverLock } from "@/Framework/Storage/storageWriteLock"
 import { createLocalStorageDriver } from "@/Framework/Storage/drivers/LocalStorageDriver"
@@ -203,6 +208,204 @@ describe.runIf(AVAILABLE.length > 0).each(AVAILABLE)("on $name", (engine) => {
     expect(job?.status).toBe("completed")
     expect(job?.destinationSecretAccessKey).toBeNull()
   }, 180_000)
+})
+
+// --------------------------------------------------------------------------
+
+/**
+ * THE ONE-OPEN-MIGRATION GUARANTEE, AS THE DATABASE ENFORCES IT.
+ *
+ * `create()` checks for an open job and then inserts. Under PostgreSQL's READ
+ * COMMITTED, two replicas both passed that check and both inserted, and the
+ * race test below failed intermittently on `main` for exactly that reason. The
+ * guarantee is now a nullable `activeSlot` column with a unique index: every
+ * open job holds `1`, every terminal one NULL. It rests on one property of
+ * every supported engine — a unique index admits ONE `1` and ANY NUMBER of
+ * NULLs — so that property is measured on each engine rather than assumed.
+ *
+ * SQLite always runs, against a temporary file; the server engines run when
+ * their TEST_*_URL is set. It lives in this file for the reason the header
+ * gives: it writes open jobs, and vitest would run a separate file in parallel
+ * with the suites here, against the same database.
+ */
+
+function slotEngines(): Engine[] {
+  const dir = mkdtempSync(join(tmpdir(), "flowcms-slot-sqlite-"))
+  workspaces.push(dir)
+  return [{ name: "sqlite", dialect: "sqlite", url: `file:${join(dir, "slot.db")}` }, ...AVAILABLE]
+}
+
+/**
+ * `db`, except that the first INSERT inside its transactions first waits for
+ * `beforeInsert`. That is the window between `create()`'s pre-check and its
+ * insert, where the race lives. Nothing is faked: every statement still runs
+ * against the real engine, and only their order is arranged.
+ */
+function pauseBeforeFirstInsert<T extends object>(db: T, beforeInsert: () => Promise<void>): T {
+  let paused = false
+  const bound = (target: object, prop: PropertyKey) => {
+    const value = Reflect.get(target, prop)
+    return typeof value === "function" ? value.bind(target) : value
+  }
+  type Transaction = (fn: (tx: object) => Promise<unknown>, config?: unknown) => Promise<unknown>
+  type Insert = (table: unknown) => { values: (values: unknown) => unknown }
+
+  return new Proxy(db, {
+    get(target, prop) {
+      if (prop !== "transaction") return bound(target, prop)
+      const transaction = Reflect.get(target, prop) as Transaction
+      return (fn: (tx: object) => Promise<unknown>, config?: unknown) =>
+        transaction.call(
+          target,
+          (tx: object) =>
+            fn(
+              new Proxy(tx, {
+                get(txTarget, txProp) {
+                  if (txProp !== "insert" || paused) return bound(txTarget, txProp)
+                  const insert = Reflect.get(txTarget, txProp) as Insert
+                  return (table: unknown) => ({
+                    values: async (values: unknown) => {
+                      paused = true
+                      await beforeInsert()
+                      return insert.call(txTarget, table).values(values)
+                    },
+                  })
+                },
+              }),
+            ),
+          config,
+        )
+    },
+  })
+}
+
+describe.each(slotEngines())("the open-migration slot on $name", (engine) => {
+  let handle: DatabaseHandle
+
+  beforeAll(async () => {
+    if (engine.dialect === "sqlite") {
+      // Remote engines are migrated by the harness that starts them; the
+      // temporary SQLite file migrates itself, as tests/db/contract.test.ts does.
+      const { createClient } = await import("@libsql/client")
+      const { drizzle } = await import("drizzle-orm/libsql")
+      const { migrate } = await import("drizzle-orm/libsql/migrator")
+      const client = createClient({ url: engine.url })
+      try {
+        await migrate(drizzle(client), { migrationsFolder: "src/db/migrations/sqlite" })
+      } finally {
+        client.close()
+      }
+    }
+    handle = createDatabase(
+      parseDatabaseConfig({ DATABASE_DIALECT: engine.dialect, DATABASE_URL: engine.url }),
+    )
+    handles.push(handle)
+  }, 60_000)
+
+  const clear = async () => {
+    await handle.db.delete(handle.schema.storageMigrationEntries as never)
+    await handle.db.delete(handle.schema.storageMigrations as never)
+  }
+  beforeEach(clear)
+  afterEach(clear)
+
+  const job = (overrides: Record<string, unknown>) => ({
+    id: randomUUID(),
+    status: "draft",
+    mode: "copy",
+    sourceDriver: "local",
+    sourceLocationId: "local:/source",
+    destinationDriver: "local",
+    destinationLocationId: "local:/destination",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  })
+  const insert = (row: Record<string, unknown>) =>
+    Promise.resolve(handle.db.insert(handle.schema.storageMigrations as never).values(row as never))
+  const slots = async () =>
+    ((await handle.db.select().from(handle.schema.storageMigrations as never)) as MigrationRow[]).map(
+      (row) => row.activeSlot,
+    )
+
+  it("refuses a second slotted row, as a unique violation", async () => {
+    await insert(job({ activeSlot: 1 }))
+
+    const error = await insert(job({ activeSlot: 1 })).then(
+      () => null,
+      (e: unknown) => e,
+    )
+
+    expect(error, "a second open job was admitted").not.toBeNull()
+    expect(isUniqueViolation(error)).toBe(true)
+    expect(await slots()).toEqual([1])
+  })
+
+  it("admits any number of rows whose slot is NULL", async () => {
+    // Terminal jobs, and an open job from before 0009 that the backfill left
+    // unslotted. No partial index is needed, on any engine.
+    for (const status of ["completed", "failed", "cancelled", "completed", "copying"]) {
+      await insert(job({ status, activeSlot: null }))
+    }
+    await insert(job({ activeSlot: 1 }))
+
+    const all = await slots()
+    expect(all.filter((slot) => slot === null)).toHaveLength(5)
+    expect(all.filter((slot) => slot === 1)).toHaveLength(1)
+  })
+
+  it.runIf(engine.dialect !== "sqlite")(
+    "tells the replica that lost the race MigrationAlreadyActiveError, naming the winner",
+    async () => {
+      // THE RACE, MADE DETERMINISTIC. Replica A passes its pre-check. Before A
+      // inserts, replica B opens a job and commits, and A's INSERT then
+      // collides with B's slot. A must hear "already in progress", naming the
+      // job that won, and never a raw duplicate-key error. Both replicas are
+      // real connection pools on the real engine. SQLite is excluded: it
+      // serialises writers, so B could not commit inside A's transaction.
+      const rival = createDatabase(
+        parseDatabaseConfig({ DATABASE_DIALECT: engine.dialect, DATABASE_URL: engine.url }),
+      )
+      handles.push(rival)
+
+      const repositoryOn = (db: object, schemaOf: DatabaseHandle) =>
+        createMigrationRepository({
+          db: db as never,
+          migrations: schemaOf.schema.storageMigrations as never,
+          entries: schemaOf.schema.storageMigrationEntries as never,
+          dialect: schemaOf.dialect,
+        })
+      const open = (repository: ReturnType<typeof repositoryOn>) =>
+        repository.create({
+          mode: "copy",
+          source: { driver: "local", locationId: "local:/source", root: "/source" },
+          destination: { driver: "local", locationId: "local:/destination", root: "/destination" },
+        })
+
+      let winner: MigrationRow | undefined
+      const loser = repositoryOn(
+        pauseBeforeFirstInsert(handle.db, async () => {
+          winner = await open(repositoryOn(rival.db, rival))
+        }),
+        handle,
+      )
+
+      const error = await open(loser).then(
+        () => null,
+        (e: unknown) => e,
+      )
+
+      expect(winner, "the rival never opened its job").toBeDefined()
+      expect(error).toBeInstanceOf(MigrationAlreadyActiveError)
+      expect((error as MigrationAlreadyActiveError).activeId).toBe(winner!.id)
+      const rows = (await handle.db
+        .select()
+        .from(handle.schema.storageMigrations as never)) as MigrationRow[]
+      expect(rows.map((row) => row.id)).toEqual([winner!.id])
+      expect(rows[0].activeSlot).toBe(1)
+    },
+    60_000,
+  )
 })
 
 // --------------------------------------------------------------------------

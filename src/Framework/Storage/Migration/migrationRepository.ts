@@ -1,12 +1,13 @@
-import { and, asc, desc, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } from "drizzle-orm"
 import { likeStartsWith } from "@/db/likeEscape"
-import { affectedRowCount, upsert } from "@/db/writes"
+import { affectedRowCount, isUniqueViolation, upsert } from "@/db/writes"
 import type { DatabaseDialect } from "@/Framework/Config/databaseConfig"
 import type { db as AppDb } from "@/db/client"
 import type { storageMigrations as MigrationsTable, storageMigrationEntries as EntriesTable } from "@/db/tables"
 import {
   TERMINAL_STATUSES,
   canTransition,
+  isTerminal,
   type MigrationMode,
   type MigrationStatus,
 } from "./migrationState"
@@ -131,22 +132,94 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
     return (rows[0] as MigrationRow | undefined) ?? null
   }
 
-  /**
-   * Opens a job, refusing if one is already open.
-   *
-   * The check and the insert run in a TRANSACTION. Checking first and inserting
-   * afterwards leaves a window in which two requests both see nothing and both
-   * insert — and two concurrent relocations would each copy to their own
-   * destination while the other mutated the source, so each final delta would
-   * be computed against a baseline the other had invalidated.
-   */
-  async function create(input: {
+  type NewMigration = {
     mode: MigrationMode
     source: TopologySnapshot
     destination: TopologySnapshot
     destinationAccessKeyId?: string | null
     destinationSecretAccessKey?: string | null
-  }): Promise<MigrationRow> {
+  }
+
+  /**
+   * Opens a job, refusing if one is already open.
+   *
+   * THE DATABASE IS THE GUARANTEE, NOT THIS FUNCTION. The check and the insert
+   * share a transaction, and that does NOT close the window between them: under
+   * PostgreSQL's READ COMMITTED, two replicas each ran the check, each saw
+   * nothing open, and each inserted. Two concurrent relocations would each copy
+   * to their own destination while the other mutated the source, so each final
+   * delta would be computed against a baseline the other had invalidated.
+   *
+   * What closes the window is the `activeSlot` column. Every open job is
+   * inserted holding `1`, and its unique index admits only one `1`, so the
+   * database itself refuses the second of two racing inserts.
+   *
+   * The pre-check stays as the friendly fast path: it names the open job
+   * without provoking an error. The database's refusal is handled AFTER the
+   * transaction has rolled back, because on PostgreSQL a transaction that hit
+   * an error is aborted and runs nothing more. The open job is then looked up
+   * and reported as already in progress. If none is open by then, either the
+   * job that won finished in between — the two were never concurrent — or a
+   * TERMINAL row is still holding the slot it should have released: a leak
+   * from a process that predates it, or an operator's hand-edit. Either way
+   * `refuseIfAnotherIsOpen` self-heals any such leaked slot before returning,
+   * so the create below is retried, once, against a slot it now has a real
+   * chance of winning.
+   */
+  async function create(input: NewMigration): Promise<MigrationRow> {
+    try {
+      return await insertOpenJob(input)
+    } catch (error) {
+      await refuseIfAnotherIsOpen(error)
+    }
+
+    try {
+      return await insertOpenJob(input)
+    } catch (error) {
+      await refuseIfAnotherIsOpen(error)
+      // Refused by the slot twice, with nothing open and no leaked slot left
+      // to release either time: something the self-heal below cannot explain.
+      // Report the database's own error rather than retry forever or guess.
+      throw error
+    }
+  }
+
+  /**
+   * After a failed insert: throws `MigrationAlreadyActiveError` if the failure
+   * was the slot's unique index and another job is open. Rethrows any other
+   * error unchanged.
+   *
+   * OTHERWISE, SELF-HEALS. A unique violation with nothing open means the slot
+   * is held by a TERMINAL row, and by the invariant — every terminal row's
+   * `activeSlot` is NULL — a terminal row that still holds it is a leak, never
+   * a second live job: a rolling deploy where a pre-`0009` replica finished a
+   * job through its old `transition()` or `commitCutover`, neither of which
+   * cleared the slot, or an operator editing `status` by hand. Left alone it is
+   * permanent — every later `create()` would fail the same way forever — so it
+   * is released here rather than merely reported, which also gives the retry
+   * above something real to succeed on.
+   */
+  async function refuseIfAnotherIsOpen(error: unknown): Promise<void> {
+    if (!isUniqueViolation(error)) throw error
+    const open = await findActive()
+    if (open) throw new MigrationAlreadyActiveError(open.id)
+
+    const released = await db
+      .update(migrations)
+      .set({ activeSlot: null })
+      .where(
+        and(isNotNull(migrations.activeSlot), inArray(migrations.status, [...TERMINAL_STATUSES])),
+      )
+    const releasedCount = affectedRowCount(released)
+    if (releasedCount > 0) {
+      console.warn(
+        `[storage-migration] released ${releasedCount} stale slot(s) left behind by a finished job`,
+      )
+    }
+  }
+
+  /** One attempt: the pre-check and the slotted insert, in one transaction. */
+  async function insertOpenJob(input: NewMigration): Promise<MigrationRow> {
     return db.transaction(async (tx) => {
       const open = await tx
         .select({ id: migrations.id })
@@ -181,6 +254,9 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
         destinationRoot: input.destination.root ?? null,
         destinationAccessKeyId: input.destinationAccessKeyId ?? null,
         destinationSecretAccessKey: input.destinationSecretAccessKey ?? null,
+        // THE SLOT. Its unique index admits one `1`, so a second open job
+        // cannot be inserted, however the pre-check above raced.
+        activeSlot: 1,
         createdAt: now,
         updatedAt: now,
       }
@@ -197,6 +273,10 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
    * Returns the updated row, or throws. It never returns a row that was not
    * written: a caller that got a row back knows its transition is the one that
    * committed, which is what makes "advance one batch" safe to retry.
+   *
+   * A move to a terminal status gives back the open-migration slot, in the same
+   * write, so the next migration can open. Every other move leaves it alone:
+   * the job is still open, and still holds it.
    */
   async function transition(
     id: string,
@@ -219,6 +299,7 @@ export function createMigrationRepository(deps: MigrationRepositoryDeps) {
       .set({
         ...patch,
         status: to,
+        ...(isTerminal(to) ? { activeSlot: null } : {}),
         version: expectedVersion + 1,
         updatedAt: new Date(),
       })

@@ -4,12 +4,15 @@ import { join } from "node:path"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { parseDatabaseConfig } from "@/Framework/Config/databaseConfig"
 import { createDatabase, type DatabaseHandle } from "@/db/createDatabase"
+import { isUniqueViolation } from "@/db/writes"
 import {
   MigrationAlreadyActiveError,
   MigrationTransitionError,
   createMigrationRepository,
   type MigrationRepository,
+  type MigrationRow,
 } from "@/Framework/Storage/Migration/migrationRepository"
+import { acquireCutoverLock } from "@/Framework/Storage/storageWriteLock"
 
 /**
  * DURABLE MIGRATION STATE, against a real database.
@@ -118,8 +121,10 @@ describe("opening a job", () => {
   })
 
   it("does the check and the insert in one transaction", async () => {
-    // The guard against two requests both seeing "no open job" and both
-    // inserting is the TRANSACTION, not the ordering of the two statements.
+    // The transaction alone does NOT stop two requests both seeing "no open
+    // job" and both inserting: under PostgreSQL's READ COMMITTED, both did.
+    // The guarantee is the unique `activeSlot` index. See "the active slot"
+    // below, and the two-replica race in tests/db/storageMigrationEngines.test.ts.
     //
     // Deliberately not asserted by firing two `create` calls at once: libsql
     // runs one connection and serialises write transactions, so a concurrent
@@ -435,5 +440,279 @@ describe("secrets", () => {
 
     const reloaded = await repo.findById(job.id)
     expect(reloaded?.destinationSecretAccessKey).toBe("the-secret")
+  })
+})
+
+// --------------------------------------------------------------------------
+
+/**
+ * THE ACTIVE SLOT — the database's own refusal of a second open job.
+ *
+ * The pre-check in `create()` is a friendly fast path, and on PostgreSQL it
+ * raced: two replicas both read "nothing open" and both inserted. What makes
+ * "at most one open job" TRUE is the nullable `activeSlot` column and its
+ * unique index. Every open job holds `1`, every terminal one gives it back as
+ * NULL, and the index admits one `1` and any number of NULLs. These tests pin
+ * the half of that contract the repository owns: taking the slot, keeping it
+ * while the job is open, and giving it back on every path that finishes a job.
+ */
+describe("the active slot", () => {
+  const open = () => repo.create({ mode: "copy", source, destination })
+
+  /** The legal path to the cutover lock, one transition at a time. */
+  async function toCuttingOver(): Promise<MigrationRow> {
+    let job = await open()
+    for (const to of [
+      "destination_tested",
+      "inventorying",
+      "ready",
+      "copying",
+      "verifying",
+      "ready_to_cutover",
+      "cutting_over",
+    ] as const) {
+      job = await repo.transition(job.id, job.version, to)
+    }
+    return job
+  }
+
+  /** Every way the repository moves a job to a terminal status. */
+  const FINISHES = [
+    {
+      how: "cancelled",
+      start: () => open(),
+      finish: (job: MigrationRow) => repo.cancel(job.id, job.version),
+    },
+    {
+      how: "failed before copying",
+      start: () => open(),
+      finish: (job: MigrationRow) => repo.transition(job.id, job.version, "failed"),
+    },
+    {
+      how: "failed mid-cutover",
+      start: () => toCuttingOver(),
+      finish: (job: MigrationRow) => repo.transition(job.id, job.version, "failed"),
+    },
+    {
+      // What recovery does for a cutover that committed while its job row never
+      // caught up. The ordinary cutover completes the job in `commitCutover`,
+      // which `migrationCutoverTransaction.test.ts` covers.
+      how: "completed",
+      start: () => toCuttingOver(),
+      finish: (job: MigrationRow) => repo.transition(job.id, job.version, "completed"),
+    },
+  ]
+
+  it("is taken when a job opens", async () => {
+    const job = await open()
+
+    expect(job.activeSlot).toBe(1)
+    expect((await repo.findById(job.id))?.activeSlot).toBe(1)
+  })
+
+  it("is kept through every non-terminal step, the cutover lock included", async () => {
+    let job = await open()
+    for (const to of [
+      "draft",
+      "destination_tested",
+      "inventorying",
+      "inventorying",
+      "ready",
+      "copying",
+      "verifying",
+      "ready_to_cutover",
+    ] as const) {
+      job = await repo.transition(job.id, job.version, to)
+      expect(job.activeSlot, `after moving to ${to}`).toBe(1)
+    }
+
+    job = await repo.patch(job.id, job.version, { extrasAcknowledged: true } as Partial<MigrationRow>)
+    expect(job.activeSlot, "after a patch").toBe(1)
+
+    // The cutover lock writes `cutting_over` itself, outside `transition()`.
+    const locked = await acquireCutoverLock(job.id, "ready_to_cutover", {
+      db: handle.db as never,
+      migrations: handle.schema.storageMigrations as never,
+    })
+    expect(locked).toBe(true)
+    expect((await repo.findById(job.id))?.activeSlot, "while cutting over").toBe(1)
+  })
+
+  it.each(FINISHES)("is given back when a job is $how", async ({ start, finish }) => {
+    const finished = await finish(await start())
+
+    expect(finished.status).toMatch(/^(cancelled|failed|completed)$/)
+    expect(finished.activeSlot).toBeNull()
+  })
+
+  it.each(FINISHES)("lets a new job open once the previous one was $how", async ({ start, finish }) => {
+    await finish(await start())
+
+    const next = await open()
+
+    expect(next.activeSlot).toBe(1)
+    const rows = await handle.db.select().from(handle.schema.storageMigrations)
+    expect(rows.filter((row) => row.activeSlot === 1).map((row) => row.id)).toEqual([next.id])
+  })
+})
+
+/**
+ * A LOST RACE, AS `create()` SEES IT.
+ *
+ * On a server engine the race is two replicas, and
+ * `tests/db/storageMigrationEngines.test.ts` drives exactly that: the loser gets
+ * `MigrationAlreadyActiveError` naming the winner. SQLite serialises writers, so
+ * no genuine rival can commit between this pre-check and this insert. The rival
+ * is written INSIDE the same transaction instead. The unique violation is the
+ * database's own, and the rollback it forces removes the rival too, which
+ * leaves exactly what a winner that finished before the loser looked leaves
+ * behind: a violation, and no open job to name.
+ *
+ * Only the timing is arranged. Every statement runs against the real database.
+ */
+describe("a unique violation on the insert", () => {
+  /** A repository whose job-opening transaction runs `rival` just before its INSERT. */
+  function repoWithRival(rival: (tx: typeof handle.db) => Promise<void>, times: number) {
+    let remaining = times
+    const bound = (target: object, prop: PropertyKey) => {
+      const value = Reflect.get(target, prop)
+      return typeof value === "function" ? value.bind(target) : value
+    }
+    const withRivalInsert = (tx: typeof handle.db) =>
+      new Proxy(tx, {
+        get(target, prop) {
+          if (prop !== "insert" || remaining === 0) return bound(target, prop)
+          return (table: typeof handle.schema.storageMigrations) => ({
+            values: async (values: never) => {
+              remaining -= 1
+              await rival(target)
+              return target.insert(table).values(values)
+            },
+          })
+        },
+      })
+    const db = new Proxy(handle.db, {
+      get(target, prop) {
+        if (prop !== "transaction") return bound(target, prop)
+        return (fn: (tx: typeof handle.db) => Promise<unknown>) =>
+          target.transaction((tx) => fn(withRivalInsert(tx as never)))
+      },
+    })
+    return createMigrationRepository({
+      db: db as never,
+      migrations: handle.schema.storageMigrations,
+      entries: handle.schema.storageMigrationEntries,
+    })
+  }
+
+  const insertSlottedRival = async (tx: typeof handle.db) => {
+    await tx.insert(handle.schema.storageMigrations).values({
+      id: crypto.randomUUID(),
+      status: "draft",
+      mode: "copy",
+      sourceDriver: source.driver,
+      sourceLocationId: source.locationId,
+      destinationDriver: destination.driver,
+      destinationLocationId: destination.locationId,
+      activeSlot: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as never)
+  }
+
+  it("is handled after the rollback: with no open job to name, create() retries once and succeeds", async () => {
+    let rivals = 0
+    const racing = repoWithRival(async (tx) => {
+      rivals += 1
+      await insertSlottedRival(tx)
+    }, 1)
+
+    const job = await racing.create({ mode: "copy", source, destination })
+
+    expect(rivals).toBe(1)
+    expect(job.activeSlot).toBe(1)
+    // The rival went with the rolled-back transaction; only the retry's row is left.
+    const rows = await handle.db.select().from(handle.schema.storageMigrations)
+    expect(rows.map((row) => row.id)).toEqual([job.id])
+  })
+
+  it("retries at most once, then surfaces the violation rather than looping", async () => {
+    let rivals = 0
+    const racing = repoWithRival(async (tx) => {
+      rivals += 1
+      await insertSlottedRival(tx)
+    }, Number.POSITIVE_INFINITY)
+
+    const error = await racing.create({ mode: "copy", source, destination }).then(
+      () => null,
+      (e: unknown) => e,
+    )
+
+    expect(rivals).toBe(2)
+    expect(error).not.toBeNull()
+    expect(error).not.toBeInstanceOf(MigrationAlreadyActiveError)
+    expect(isUniqueViolation(error)).toBe(true)
+    expect(await handle.db.select().from(handle.schema.storageMigrations)).toHaveLength(0)
+  })
+})
+
+/**
+ * SELF-HEALING A LEAKED SLOT.
+ *
+ * By the invariant, a TERMINAL row's `activeSlot` is always NULL. A row that
+ * violates that invariant is a bug's residue — a rolling deploy where a
+ * pre-`0009` replica finished a job through its old `transition()` or
+ * `commitCutover`, neither of which cleared the slot, or an operator editing
+ * `status` by hand — never a second live job. Left alone, it is permanent:
+ * every later `create()` fails the same way forever. `refuseIfAnotherIsOpen`
+ * releases such rows before returning to the retry, so the retry has
+ * something real to succeed on.
+ */
+describe("self-healing a leaked slot", () => {
+  it("releases a stale slot held by a terminal row, and lets create() succeed", async () => {
+    // Seeded directly: this is what a pre-`0009` replica, or a by-hand status
+    // edit, would have left behind — a finished row that never gave its slot
+    // back.
+    await handle.db.insert(handle.schema.storageMigrations).values({
+      id: "leaked-slot-job",
+      status: "completed",
+      mode: "copy",
+      sourceDriver: source.driver,
+      sourceLocationId: source.locationId,
+      destinationDriver: destination.driver,
+      destinationLocationId: destination.locationId,
+      activeSlot: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as never)
+
+    const job = await repo.create({ mode: "copy", source, destination })
+
+    expect(job.activeSlot).toBe(1)
+    const stale = await repo.findById("leaked-slot-job")
+    expect(stale?.activeSlot).toBeNull()
+  })
+})
+
+/**
+ * THE PIN: `activeSlot` NEVER SURVIVES A TERMINAL PATCH.
+ *
+ * `transition()` spreads the caller's `patch` before it overrides `activeSlot`
+ * for a terminal move — see the field order at
+ * `migrationRepository.ts` around line 273. If that ordering were ever
+ * reversed, a patch carrying `activeSlot` (however that got there) would win
+ * over the guarantee that every terminal row's slot is NULL, and the self-heal
+ * above only exists because that guarantee occasionally does not hold.
+ */
+describe("a terminal transition always wins the activeSlot override", () => {
+  it("ignores a patch that tries to set activeSlot on a terminal move", async () => {
+    const job = await repo.create({ mode: "copy", source, destination })
+
+    const finished = await repo.transition(job.id, job.version, "failed", {
+      activeSlot: 1,
+    } as Partial<MigrationRow>)
+
+    expect(finished.activeSlot).toBeNull()
+    expect((await repo.findById(job.id))?.activeSlot).toBeNull()
   })
 })
