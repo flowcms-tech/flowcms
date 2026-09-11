@@ -52,7 +52,9 @@ FlowCMS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   migration holds and every finished one gives back; the loser of a race is
   told a migration is already in progress. The schema migration that adds the
   slot backfills only the newest open job, so an installation that already
-  holds two still upgrades. Pinned by `tests/db/storageMigrationEngines.test.ts`.
+  holds two still upgrades. A slot a finished job left behind — from an older
+  process, or a hand-edited status — is now released automatically the next
+  time a migration is opened. Pinned by `tests/db/storageMigrationEngines.test.ts`.
 
 ### Changed
 

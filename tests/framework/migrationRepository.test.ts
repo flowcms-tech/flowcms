@@ -655,3 +655,64 @@ describe("a unique violation on the insert", () => {
     expect(await handle.db.select().from(handle.schema.storageMigrations)).toHaveLength(0)
   })
 })
+
+/**
+ * SELF-HEALING A LEAKED SLOT.
+ *
+ * By the invariant, a TERMINAL row's `activeSlot` is always NULL. A row that
+ * violates that invariant is a bug's residue — a rolling deploy where a
+ * pre-`0009` replica finished a job through its old `transition()` or
+ * `commitCutover`, neither of which cleared the slot, or an operator editing
+ * `status` by hand — never a second live job. Left alone, it is permanent:
+ * every later `create()` fails the same way forever. `refuseIfAnotherIsOpen`
+ * releases such rows before returning to the retry, so the retry has
+ * something real to succeed on.
+ */
+describe("self-healing a leaked slot", () => {
+  it("releases a stale slot held by a terminal row, and lets create() succeed", async () => {
+    // Seeded directly: this is what a pre-`0009` replica, or a by-hand status
+    // edit, would have left behind — a finished row that never gave its slot
+    // back.
+    await handle.db.insert(handle.schema.storageMigrations).values({
+      id: "leaked-slot-job",
+      status: "completed",
+      mode: "copy",
+      sourceDriver: source.driver,
+      sourceLocationId: source.locationId,
+      destinationDriver: destination.driver,
+      destinationLocationId: destination.locationId,
+      activeSlot: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as never)
+
+    const job = await repo.create({ mode: "copy", source, destination })
+
+    expect(job.activeSlot).toBe(1)
+    const stale = await repo.findById("leaked-slot-job")
+    expect(stale?.activeSlot).toBeNull()
+  })
+})
+
+/**
+ * THE PIN: `activeSlot` NEVER SURVIVES A TERMINAL PATCH.
+ *
+ * `transition()` spreads the caller's `patch` before it overrides `activeSlot`
+ * for a terminal move — see the field order at
+ * `migrationRepository.ts` around line 273. If that ordering were ever
+ * reversed, a patch carrying `activeSlot` (however that got there) would win
+ * over the guarantee that every terminal row's slot is NULL, and the self-heal
+ * above only exists because that guarantee occasionally does not hold.
+ */
+describe("a terminal transition always wins the activeSlot override", () => {
+  it("ignores a patch that tries to set activeSlot on a terminal move", async () => {
+    const job = await repo.create({ mode: "copy", source, destination })
+
+    const finished = await repo.transition(job.id, job.version, "failed", {
+      activeSlot: 1,
+    } as Partial<MigrationRow>)
+
+    expect(finished.activeSlot).toBeNull()
+    expect((await repo.findById(job.id))?.activeSlot).toBeNull()
+  })
+})
